@@ -51,6 +51,7 @@ export interface AgentTrace {
 }
 
 export interface TraceMetadata {
+  sessionId?: string;
   startTime: number;
   endTime: number;
   model: string;

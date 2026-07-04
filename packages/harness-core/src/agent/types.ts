@@ -152,3 +152,22 @@ export interface ToolRegistryLike {
   list(): ToolDefinition[];
   execute(name: string, args: Record<string, unknown>): Promise<unknown>;
 }
+
+// ===== Stream Events =====
+
+/**
+ * Agent 流式事件
+ *
+ * 可辨识联合类型，覆盖 Agent 执行过程中的所有流式事件。
+ * 使用方通过 switch/case 按 type 分发处理。
+ */
+export type StreamEvent =
+  | { type: 'text-delta'; content: string }
+  | { type: 'tool-call-start'; id: string; name: string }
+  | { type: 'tool-call-args'; id: string; args: string }
+  | { type: 'tool-call-end'; id: string }
+  | { type: 'tool-result'; id: string; name: string; result: unknown; error?: string }
+  | { type: 'step-start'; stepIndex: number }
+  | { type: 'step-end'; stepIndex: number }
+  | { type: 'done'; output: string; tokens: { input: number; output: number; total: number }; toolCalls: ToolCallRecord[] }
+  | { type: 'error'; message: string };

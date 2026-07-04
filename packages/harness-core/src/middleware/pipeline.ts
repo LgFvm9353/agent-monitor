@@ -151,7 +151,7 @@ export function createCostTracker(options?: {
           (result.tokens.input / 1000) * inputPrice +
           (result.tokens.output / 1000) * outputPrice;
         // 将 cost 附加到结果中供下游使用
-        result.tokens = { ...result.tokens, ...({ estimatedCost: cost } as never) };
+        (result.tokens as Record<string, number>).estimatedCost = cost;
       }
       return result;
     },

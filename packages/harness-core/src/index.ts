@@ -9,8 +9,12 @@
  * - MiddlewarePipeline: 中间件管道（洋葱模型）
  * - MemoryManager: 记忆管理（对话历史 + 摘要）
  * - EvalRunner: 评估框架（数据集 + 多维度评分）
- * - Tracer: Agent 执行追踪（OpenTelemetry 兼容）
+ * - Tracer: Agent 执行追踪
  * - ModelAdapter: 模型适配器（OpenAI / Anthropic）
+ * - Guardrails: 安全护栏（内容过滤 / 工具沙箱 / 预算控制）
+ * - StreamAccumulator: 流式工具调用累积器
+ * - StepRecorder: 步骤记录与回放
+ * - BreakpointManager: 断点调试管理
  *
  * @example
  * ```ts
@@ -32,11 +36,35 @@
  *
  * console.log(result.output);
  * ```
+ *
+ * @example
+ * ```ts
+ * // 流式执行
+ * for await (const event of runner.runStream('...', config)) {
+ *   if (event.type === 'text-delta') console.log(event.content);
+ *   if (event.type === 'done') console.log('Done:', event.output);
+ * }
+ * ```
+ *
+ * @example
+ * ```ts
+ * // 安全护栏
+ * import { createContentFilterGuard, createBudgetGuard } from '@agent-harness/core';
+ *
+ * runner.withGuardrails([
+ *   createContentFilterGuard(),
+ *   createBudgetGuard({ maxTokens: 50_000 }),
+ * ]);
+ * ```
  */
 
 // Agent
 export { AgentRunner } from './agent/runner';
-export { createOpenAIAdapter, createAnthropicAdapter } from './agent/adapter';
+export {
+  createOpenAIAdapter,
+  createAnthropicAdapter,
+  StreamAccumulator,
+} from './agent/adapter';
 export type {
   ModelAdapter,
   ModelOptions,
@@ -48,6 +76,7 @@ export type {
   AgentStep,
   ToolCallRecord,
   RunContext,
+  StreamEvent,
 } from './agent/types';
 
 // Tool
@@ -70,4 +99,20 @@ export { EvalRunner, DatasetManager } from './eval/runner';
 export type { ScorerFunction } from './eval/runner';
 
 // Trace
-export { createTracer, getGlobalTracer } from './trace/tracer';
+export {
+  Tracer,
+  createTracer,
+  getGlobalTracer,
+  StepRecorder,
+  BreakpointManager,
+} from './trace/tracer';
+export type { StepRecord, Breakpoint } from './trace/tracer';
+
+// Guardrails
+export { createContentFilterGuard } from './guardrail/content-filter';
+export type { ContentFilterConfig } from './guardrail/content-filter';
+export { createToolSandboxGuard } from './guardrail/tool-sandbox';
+export type { ToolSandboxConfig } from './guardrail/tool-sandbox';
+export { createBudgetGuard, MODEL_PRICING } from './guardrail/budget-guard';
+export type { BudgetConfig, TokenPricing } from './guardrail/budget-guard';
+export type { Guardrail, GuardResult } from './guardrail/types';

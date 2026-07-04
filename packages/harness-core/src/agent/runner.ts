@@ -26,10 +26,6 @@
 import { EventEmitter } from 'events';
 import type {
   AgentConfig,
-  AgentTrace,
-  AgentSpan,
-  TraceMetadata,
-  TokenUsage,
 } from '../types';
 import type {
   ModelAdapter,
@@ -40,12 +36,14 @@ import type {
   ToolCallRecord,
   ToolCall,
   RunMetrics,
-  ToolRegistryLike,
+  StreamEvent,
 } from './types';
 import { ToolRegistry } from '../tool/registry';
 import { MiddlewarePipeline } from '../middleware/pipeline';
 import { MemoryManager } from '../memory/manager';
-import { createTracer } from '../trace/tracer';
+import { createTracer, StepRecorder, BreakpointManager } from '../trace/tracer';
+import { StreamAccumulator } from './adapter';
+import type { Guardrail } from '../guardrail/types';
 
 export class AgentRunner {
   private adapter: ModelAdapter;
@@ -54,6 +52,9 @@ export class AgentRunner {
   private memory: MemoryManager;
   private events: EventEmitter;
   private tracer = createTracer();
+  private guardrails: Guardrail[] = [];
+  private stepRecorder = new StepRecorder();
+  private breakpointManager = new BreakpointManager();
 
   constructor(adapter: ModelAdapter) {
     this.adapter = adapter;
@@ -83,6 +84,35 @@ export class AgentRunner {
   withMemory(config?: AgentConfig['memory']): this {
     this.memory.configure(config);
     return this;
+  }
+
+  /** 注册安全护栏 */
+  withGuardrails(guardrails: Guardrail[]): this {
+    this.guardrails.push(...guardrails);
+    return this;
+  }
+
+  /** 设置断点 */
+  withBreakpoints(breakpoints: Array<{ id: string; onStepType?: string; onToolName?: string; onStepIndex?: number }>): this {
+    for (const bp of breakpoints) {
+      this.breakpointManager.add({
+        id: bp.id,
+        onStepType: bp.onStepType as 'llm_call' | 'tool_call' | 'middleware' | 'error' | undefined,
+        onToolName: bp.onToolName,
+        onStepIndex: bp.onStepIndex,
+      });
+    }
+    return this;
+  }
+
+  /** 获取断点管理器 */
+  getBreakpointManager(): BreakpointManager {
+    return this.breakpointManager;
+  }
+
+  /** 获取步骤记录器 */
+  getStepRecorder(): StepRecorder {
+    return this.stepRecorder;
   }
 
   /** 监听事件 */
@@ -162,14 +192,21 @@ export class AgentRunner {
 
   /**
    * 流式执行 Agent
+   *
+   * 使用 StreamEvent 可辨识联合类型，覆盖完整的 Agent 执行流：
+   * text-delta → tool-call-start → tool-call-args → tool-call-end → tool-result → ... → done
    */
   async *runStream(
     userMessage: string,
     config: Omit<AgentConfig, 'tools' | 'middleware' | 'memory'>,
-  ): AsyncGenerator<{ type: 'text' | 'tool_call' | 'step' | 'done' | 'error'; data: unknown }> {
-    // 简化版流式实现
+  ): AsyncGenerator<StreamEvent> {
+    const startTime = Date.now();
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+
     const messages: AgentMessage[] = [
       { role: 'system', content: config.systemPrompt },
+      ...this.memory.getHistory(),
       { role: 'user', content: userMessage },
     ];
 
@@ -180,48 +217,159 @@ export class AgentRunner {
       execute: t.execute,
     }));
 
-    for (let i = 0; i < 20; i++) {
-      yield { type: 'step', data: { step: i + 1 } };
+    const toolCalls: ToolCallRecord[] = [];
+    const maxSteps = 20;
 
-      // 流式调用 LLM
+    for (let stepIndex = 0; stepIndex < maxSteps; stepIndex++) {
+      yield { type: 'step-start', stepIndex };
+
       let fullContent = '';
-      let pendingToolCalls: ToolCall[] = [];
+      const accumulator = new StreamAccumulator();
 
-      for await (const chunk of this.adapter.chatStream(messages, {
-        maxTokens: config.maxTokens,
-        temperature: config.temperature,
-        tools: toolDefs.length > 0 ? toolDefs : undefined,
-      })) {
-        if (chunk.content) {
-          fullContent += chunk.content;
-          yield { type: 'text', data: chunk.content };
+      try {
+        // 流式调用 LLM
+        for await (const chunk of this.adapter.chatStream(messages, {
+          maxTokens: config.maxTokens,
+          temperature: config.temperature,
+          tools: toolDefs.length > 0 ? toolDefs : undefined,
+        })) {
+          // 文本增量
+          if (chunk.content) {
+            fullContent += chunk.content;
+            yield { type: 'text-delta', content: chunk.content };
+          }
+
+          // Tool call delta（完整或部分）
+          if (chunk.toolCallDelta) {
+            const tc = chunk.toolCallDelta;
+
+            // 检测新的 tool call（通过 accumulator 检查）
+            const before = accumulator.peek();
+            if (tc.id && tc.name && !before.some(b => b.id === tc.id)) {
+              yield { type: 'tool-call-start', id: tc.id, name: tc.name };
+            }
+
+            // 参数增量
+            if (tc.id && tc.arguments && Object.keys(tc.arguments).length > 0) {
+              const argsStr = JSON.stringify(tc.arguments);
+              if (argsStr !== '{}') {
+                yield { type: 'tool-call-args', id: tc.id, args: argsStr };
+              }
+            }
+
+            // 将 delta 填入 accumulator
+            // 支持两种格式：完整的 ToolCall 或 delta 格式
+            accumulator.addOpenAIDelta({
+              index: 0, // 简化：单 tool call 场景
+              id: tc.id,
+              function: tc.name ? { name: tc.name, arguments: JSON.stringify(tc.arguments) } : undefined,
+            });
+          }
+
+          // Finish reason
+          if (chunk.finishReason === 'tool_calls') {
+            const toolCalls = accumulator.drain();
+            for (const tc of toolCalls) {
+              yield { type: 'tool-call-end', id: tc.id };
+            }
+          }
         }
-        if (chunk.toolCallDelta) {
-          // 累积 tool call delta
-          yield { type: 'tool_call', data: chunk.toolCallDelta };
-        }
-      }
 
-      // 检查是否需要执行工具
-      if (pendingToolCalls.length > 0) {
-        messages.push({ role: 'assistant', content: fullContent, toolCalls: pendingToolCalls });
+        // 流结束后，drain 剩余的 tool calls
+        const pendingCalls = accumulator.drain();
 
-        for (const tc of pendingToolCalls) {
-          const result = await this.tools.execute(tc.name, tc.arguments);
+        if (pendingCalls.length > 0) {
+          yield { type: 'step-end', stepIndex };
+
+          // 添加 assistant 消息
           messages.push({
-            role: 'tool',
-            content: JSON.stringify(result),
-            toolCallId: tc.id,
-            name: tc.name,
+            role: 'assistant',
+            content: fullContent,
+            toolCalls: pendingCalls,
           });
+
+          // 执行每个 tool call
+          for (const tc of pendingCalls) {
+            const toolStart = Date.now();
+            try {
+              const result = await this.tools.execute(tc.name, tc.arguments);
+              const record: ToolCallRecord = {
+                id: tc.id,
+                name: tc.name,
+                arguments: tc.arguments,
+                result,
+                duration: Date.now() - toolStart,
+              };
+              toolCalls.push(record);
+
+              yield { type: 'tool-result', id: tc.id, name: tc.name, result };
+
+              // 添加 tool 结果消息
+              messages.push({
+                role: 'tool',
+                content: JSON.stringify(result),
+                toolCallId: tc.id,
+                name: tc.name,
+              });
+            } catch (error) {
+              const errorMsg = error instanceof Error ? error.message : String(error);
+              const record: ToolCallRecord = {
+                id: tc.id,
+                name: tc.name,
+                arguments: tc.arguments,
+                result: null,
+                duration: Date.now() - toolStart,
+                error: errorMsg,
+              };
+              toolCalls.push(record);
+
+              yield { type: 'tool-result', id: tc.id, name: tc.name, result: null, error: errorMsg };
+
+              messages.push({
+                role: 'tool',
+                content: `Error: ${errorMsg}`,
+                toolCallId: tc.id,
+                name: tc.name,
+              });
+            }
+          }
+
+          // 继续循环 → LLM 处理 tool 结果
+          continue;
         }
-      } else {
-        yield { type: 'done', data: { content: fullContent } };
+
+        // 没有 tool calls → 最终输出
+        yield { type: 'step-end', stepIndex };
+
+        totalOutputTokens += this.estimateTokens(fullContent);
+
+        yield {
+          type: 'done',
+          output: fullContent,
+          tokens: {
+            input: totalInputTokens,
+            output: totalOutputTokens,
+            total: totalInputTokens + totalOutputTokens,
+          },
+          toolCalls,
+        };
+        return;
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        yield { type: 'error', message: errorMsg };
         return;
       }
     }
 
-    yield { type: 'error', data: 'Agent exceeded maximum steps' };
+    // 超出最大步数
+    yield { type: 'error', message: `Agent exceeded maximum of ${maxSteps} steps` };
+  }
+
+  /** 粗略 Token 估算（英文：~4 chars/token，中文：~1.5 chars/token） */
+  private estimateTokens(text: string): number {
+    const latinChars = (text.match(/[a-zA-Z0-9\s]/g) || []).length;
+    const otherChars = text.length - latinChars;
+    return Math.ceil(latinChars / 4 + otherChars / 1.5);
   }
 
   // ===== Private: Execution Loop =====
@@ -244,7 +392,29 @@ export class AgentRunner {
     for (let i = 0; i < ctx.maxSteps; i++) {
       ctx.currentStep = i;
 
-      // Step: LLM Call
+      // Breakpoint check — before step
+      const matchedBps = await this.breakpointManager.shouldBreak({
+        currentStep: i,
+        stepType: 'llm_call',
+      });
+      for (const bpId of matchedBps) {
+        this.events.emit('breakpoint-hit', { bpId, step: i });
+        await this.breakpointManager.waitForResume(bpId);
+      }
+
+      // Step: LLM Call — Guardrail beforeLLM
+      for (const guard of this.guardrails) {
+        if (guard.beforeLLM) {
+          const result = await guard.beforeLLM(ctx, ctx.messages);
+          if (!result.allowed) {
+            return this.buildErrorResult(
+              `Guard "${guard.name}" blocked LLM call: ${result.reason}`,
+              traceId, startTime, steps, state.getInputTokens(), state.getOutputTokens()
+            );
+          }
+        }
+      }
+
       const llmSpanId = this.tracer.startSpan(traceId, 'llm-call', 'llm', { step: i });
       const llmStart = Date.now();
 
@@ -279,7 +449,33 @@ export class AgentRunner {
 
       this.tracer.endSpan(llmSpanId, { output: response.content?.substring(0, 500) });
 
+      // Guardrail afterLLM
+      for (const guard of this.guardrails) {
+        if (guard.afterLLM) {
+          const result = await guard.afterLLM(ctx, response.content);
+          if (!result.allowed) {
+            return this.buildErrorResult(
+              `Guard "${guard.name}" rejected LLM response: ${result.reason}`,
+              traceId, startTime, steps, state.getInputTokens(), state.getOutputTokens()
+            );
+          }
+        }
+      }
+
       this.events.emit('step', { stepIndex: i, type: 'llm', content: response.content });
+
+      // 记录步骤
+      this.stepRecorder.record({
+        stepIndex: i,
+        type: 'llm_call',
+        name: `LLM Call #${i + 1}`,
+        input: ctx.messages[ctx.messages.length - 1]?.content?.substring(0, 500),
+        output: response.content?.substring(0, 500),
+        startTime: llmStart,
+        endTime: Date.now(),
+        tokens: { input: response.usage?.inputTokens || 0, output: response.usage?.outputTokens || 0 },
+        messageSnapshot: ctx.messages.slice(-6).map(m => ({ role: m.role, content: m.content?.substring(0, 200) ?? '' })),
+      });
 
       // 添加 assistant 消息
       ctx.messages.push({
@@ -295,6 +491,46 @@ export class AgentRunner {
       // 检查是否需要执行工具调用
       if (response.toolCalls && response.toolCalls.length > 0) {
         for (const tc of response.toolCalls) {
+          // Breakpoint check — before tool
+          const matchedToolBps = await this.breakpointManager.shouldBreak({
+            currentStep: i,
+            stepType: 'tool_call',
+            toolName: tc.name,
+          });
+          for (const bpId of matchedToolBps) {
+            this.events.emit('breakpoint-hit', { bpId, step: i, tool: tc.name });
+            await this.breakpointManager.waitForResume(bpId);
+          }
+
+          // Guardrail beforeTool
+          let toolBlocked = false;
+          for (const guard of this.guardrails) {
+            if (guard.beforeTool) {
+              const result = await guard.beforeTool(ctx, tc.name, tc.arguments);
+              if (!result.allowed) {
+                const toolRecord: ToolCallRecord = {
+                  id: tc.id,
+                  name: tc.name,
+                  arguments: tc.arguments,
+                  result: null,
+                  duration: 0,
+                  error: result.reason,
+                };
+                toolCalls.push(toolRecord);
+                ctx.messages.push({
+                  role: 'tool',
+                  content: `Tool blocked by guard "${guard.name}": ${result.reason}`,
+                  toolCallId: tc.id,
+                  name: tc.name,
+                });
+                this.events.emit('tool-call-blocked', { tool: tc.name, guard: guard.name, reason: result.reason });
+                toolBlocked = true;
+                break;
+              }
+            }
+          }
+          if (toolBlocked) continue;
+
           const toolSpanId = this.tracer.startSpan(traceId, `tool:${tc.name}`, 'tool', { tool: tc.name });
 
           const toolStart = Date.now();
@@ -321,7 +557,44 @@ export class AgentRunner {
 
             this.tracer.endSpan(toolSpanId, { result: String(result).substring(0, 500) });
 
+            // Guardrail afterTool
+            for (const guard of this.guardrails) {
+              if (guard.afterTool) {
+                const guardResult = await guard.afterTool(ctx, tc.name, result);
+                if (!guardResult.allowed) {
+                  const toolRecord: ToolCallRecord = {
+                    id: tc.id,
+                    name: tc.name,
+                    arguments: tc.arguments,
+                    result,
+                    duration: Date.now() - toolStart,
+                    error: `Rejected by guard "${guard.name}": ${guardResult.reason}`,
+                  };
+                  toolCalls.push(toolRecord);
+                  this.tracer.endSpan(toolSpanId, { error: guardResult.reason }, 'error');
+                  ctx.messages.push({
+                    role: 'tool',
+                    content: guardResult.reason || 'Tool result rejected',
+                    toolCallId: tc.id,
+                    name: tc.name,
+                  });
+                  continue;
+                }
+              }
+            }
+
             this.events.emit('tool-call', toolRecord);
+
+            // 记录工具调用步骤
+            this.stepRecorder.record({
+              stepIndex: i,
+              type: 'tool_call',
+              name: `Tool: ${tc.name}`,
+              input: tc.arguments,
+              output: typeof result === 'string' ? result.substring(0, 500) : JSON.stringify(result).substring(0, 500),
+              startTime: toolStart,
+              endTime: Date.now(),
+            });
 
             // 在消息末尾追加 tool 结果
             ctx.messages.push({

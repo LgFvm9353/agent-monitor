@@ -12,9 +12,11 @@
  *           └── Span (llm-call) ── 包含 response/tokens
  *
  * 这个 Span 树是 Dashboard 火焰图的数据来源。
+ *
+ * 每个 AgentRunner 拥有自己的 Tracer 实例（支持并发 Agent）。
  */
 
-import type { AgentTrace, AgentSpan, TraceMetadata, SpanType, SpanStatus, TokenUsage } from '../types';
+import type { AgentTrace, AgentSpan, TraceMetadata, SpanType, SpanStatus } from '../types';
 
 interface SpanRecord {
   spanId: string;
@@ -30,7 +32,7 @@ interface SpanRecord {
   children: string[]; // child spanIds
 }
 
-class Tracer {
+export class Tracer {
   private traces = new Map<string, {
     rootSpanId: string;
     spans: Map<string, SpanRecord>;
@@ -157,7 +159,7 @@ class Tracer {
 
     return {
       traceId,
-      sessionId: (trace.metadata?.sessionId) || '',
+      sessionId: (trace.metadata as Record<string, unknown>)?.sessionId as string || trace.metadata?.sessionId || '',
       rootSpan,
       metadata: {
         startTime: trace.metadata?.startTime || rootSpan.startTime,
@@ -182,16 +184,259 @@ class Tracer {
   }
 }
 
-// 全局单例
-let globalTracer: Tracer | null = null;
-
+// 工厂函数（创建新实例，不再全局单例）
 export function createTracer(): Tracer {
-  if (!globalTracer) {
-    globalTracer = new Tracer();
-  }
-  return globalTracer;
+  return new Tracer();
 }
 
+/**
+ * @deprecated 使用 `new Tracer()` 或 `createTracer()` 创建独立实例。
+ * 保留此函数仅为向后兼容，返回全局共享实例。
+ */
+let _globalTracer: Tracer | null = null;
 export function getGlobalTracer(): Tracer {
-  return createTracer();
+  if (!_globalTracer) {
+    _globalTracer = new Tracer();
+  }
+  return _globalTracer;
+}
+
+// ===== Step Recorder =====
+
+/**
+ * 可序列化的步骤记录
+ *
+ * 记录 Agent 执行过程中每一步的完整状态，
+ * 用于事后回放和调试。
+ */
+export interface StepRecord {
+  /** 步骤序号 */
+  stepIndex: number;
+  /** 步骤类型 */
+  type: 'llm_call' | 'tool_call' | 'middleware' | 'error';
+  /** 步骤名称 */
+  name: string;
+  /** 输入数据（可序列化） */
+  input?: unknown;
+  /** 输出数据（可序列化） */
+  output?: unknown;
+  /** 开始时间 */
+  startTime: number;
+  /** 结束时间 */
+  endTime: number;
+  /** Token 消耗 */
+  tokens?: { input: number; output: number };
+  /** 错误信息 */
+  error?: string;
+  /** 当前消息历史快照 */
+  messageSnapshot?: Array<{ role: string; content: string }>;
+}
+
+/**
+ * StepRecorder — 步骤记录器
+ *
+ * 记录 Agent 执行的每个步骤，支持回放和导出。
+ * 每个 AgentRunner 可配置一个 StepRecorder。
+ */
+export class StepRecorder {
+  private steps: StepRecord[] = [];
+  private sessionId: string;
+
+  constructor(sessionId?: string) {
+    this.sessionId = sessionId || `session-${Date.now().toString(36)}`;
+  }
+
+  /** 记录一个步骤 */
+  record(step: StepRecord): void {
+    this.steps.push(step);
+  }
+
+  /** 获取所有步骤 */
+  getAll(): StepRecord[] {
+    return [...this.steps];
+  }
+
+  /** 获取指定 stepIndex 的步骤 */
+  getStep(stepIndex: number): StepRecord | undefined {
+    return this.steps.find(s => s.stepIndex === stepIndex);
+  }
+
+  /** 导出为可回放的数据 */
+  export(): { sessionId: string; steps: StepRecord[]; totalSteps: number } {
+    return {
+      sessionId: this.sessionId,
+      steps: this.steps,
+      totalSteps: this.steps.length,
+    };
+  }
+
+  /** 导入回放数据 */
+  import(data: { sessionId: string; steps: StepRecord[] }): void {
+    this.sessionId = data.sessionId;
+    this.steps = data.steps;
+  }
+
+  /** 清空 */
+  clear(): void {
+    this.steps = [];
+  }
+
+  /** 获取统计 */
+  getStats(): {
+    totalSteps: number;
+    llmCalls: number;
+    toolCalls: number;
+    errors: number;
+    totalDuration: number;
+  } {
+    const llmCalls = this.steps.filter(s => s.type === 'llm_call').length;
+    const toolCalls = this.steps.filter(s => s.type === 'tool_call').length;
+    const errors = this.steps.filter(s => s.error).length;
+    const totalDuration = this.steps.length > 0
+      ? this.steps[this.steps.length - 1].endTime - this.steps[0].startTime
+      : 0;
+
+    return { totalSteps: this.steps.length, llmCalls, toolCalls, errors, totalDuration };
+  }
+}
+
+// ===== Breakpoint Manager =====
+
+/**
+ * 断点配置
+ */
+export interface Breakpoint {
+  /** 触发断点的步骤类型 */
+  onStepType?: 'llm_call' | 'tool_call' | 'middleware' | 'error';
+  /** 触发断点的工具名（仅 tool_call 类型） */
+  onToolName?: string;
+  /** 触发断点的步骤号 */
+  onStepIndex?: number;
+  /** 条件函数 */
+  condition?: (ctx: {
+    currentStep: number;
+    toolName?: string;
+    output?: string;
+  }) => boolean | Promise<boolean>;
+  /** 断点 ID（用于删除） */
+  id: string;
+}
+
+/**
+ * BreakpointManager — 断点管理器
+ *
+ * 允许外部代码在 Agent 执行的特定阶段暂停执行。
+ *
+ * @example
+ * ```ts
+ * const bpm = new BreakpointManager();
+ * bpm.add({
+ *   id: 'before-write',
+ *   onToolName: 'write_file',
+ * });
+ *
+ * // Agent 执行循环中
+ * if (bpm.shouldBreak({ currentStep: 3, toolName: 'write_file' })) {
+ *   await bpm.waitForResume();
+ * }
+ * ```
+ */
+export class BreakpointManager {
+  private breakpoints: Breakpoint[] = [];
+  private resolveMap = new Map<string, () => void>();
+  private isPausedMap = new Map<string, boolean>();
+
+  /** 添加断点 */
+  add(bp: Breakpoint): void {
+    this.breakpoints.push(bp);
+  }
+
+  /** 删除断点 */
+  remove(bpId: string): void {
+    this.breakpoints = this.breakpoints.filter(b => b.id !== bpId);
+  }
+
+  /** 清除所有断点 */
+  clearAll(): void {
+    this.breakpoints = [];
+    this.resolveMap.clear();
+    this.isPausedMap.clear();
+  }
+
+  /**
+   * 检查是否应该在此处暂停
+   *
+   * @returns 匹配的断点 ID 列表
+   */
+  async shouldBreak(ctx: {
+    currentStep: number;
+    stepType: 'llm_call' | 'tool_call' | 'middleware' | 'error';
+    toolName?: string;
+    output?: string;
+  }): Promise<string[]> {
+    const matched: string[] = [];
+    for (const bp of this.breakpoints) {
+      if (bp.onStepType && bp.onStepType !== ctx.stepType) continue;
+      if (bp.onToolName && bp.onToolName !== ctx.toolName) continue;
+      if (bp.onStepIndex !== undefined && bp.onStepIndex !== ctx.currentStep) continue;
+      if (bp.condition) {
+        const cond = await bp.condition(ctx);
+        if (!cond) continue;
+      }
+      matched.push(bp.id);
+    }
+    return matched;
+  }
+
+  /**
+   * 暂停执行，等待恢复
+   *
+   * @param bpId - 断点 ID（用于日志）
+   * @param timeoutMs - 超时（默认 0 = 无限等待）
+   * @returns 是否因超时而恢复
+   */
+  async waitForResume(bpId: string, timeoutMs = 0): Promise<boolean> {
+    this.isPausedMap.set(bpId, true);
+
+    return new Promise<boolean>((resolve) => {
+      const timer = timeoutMs > 0
+        ? setTimeout(() => {
+            this.isPausedMap.delete(bpId);
+            this.resolveMap.delete(bpId);
+            resolve(true); // timeout
+          }, timeoutMs)
+        : null;
+
+      this.resolveMap.set(bpId, () => {
+        if (timer) clearTimeout(timer);
+        this.isPausedMap.delete(bpId);
+        this.resolveMap.delete(bpId);
+        resolve(false); // resumed
+      });
+    });
+  }
+
+  /**
+   * 恢复暂停的断点
+   */
+  resume(bpId: string): void {
+    const resolve = this.resolveMap.get(bpId);
+    if (resolve) resolve();
+  }
+
+  /**
+   * 恢复所有暂停的断点
+   */
+  resumeAll(): void {
+    for (const resolve of this.resolveMap.values()) {
+      resolve();
+    }
+    this.resolveMap.clear();
+    this.isPausedMap.clear();
+  }
+
+  /** 获取当前暂停的断点 */
+  getPausedBreakpoints(): string[] {
+    return Array.from(this.isPausedMap.keys());
+  }
 }
