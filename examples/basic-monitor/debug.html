@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>SDK Debug</title></head>
+<body>
+  <h1>SDK Debug Page</h1>
+  <button onclick="triggerError()">触发 JS Error</button>
+  <button onclick="triggerCustom()">触发 Custom Event</button>
+  <pre id="log" style="background:#111;color:#0f0;padding:16px;max-height:500px;overflow-y:auto;"></pre>
+
+  <script src="sdk.js"></script>
+  <script>
+    var logEl = document.getElementById('log');
+    function log(msg) {
+      logEl.textContent += new Date().toLocaleTimeString() + ' ' + msg + '\n';
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    log('SDK 脚本加载完成');
+    log('AgentHarnessMonitor = ' + typeof AgentHarnessMonitor);
+    log('Monitor = ' + typeof AgentHarnessMonitor.Monitor);
+    log('ErrorPlugin = ' + typeof AgentHarnessMonitor.ErrorPlugin);
+
+    try {
+      log('开始创建 Monitor 实例...');
+      var monitor = new AgentHarnessMonitor.Monitor({
+        reportUrl: 'http://localhost:3001/api/monitor/report',
+        appId: 'sdk-debug',
+        enabled: true,
+        sampleRate: 1,
+        debug: true,
+        transport: { batchSize: 1, flushInterval: 2000 },
+        beforeSend: function(event) {
+          log('[beforeSend] type=' + event.type + ' id=' + event.eventId);
+          return event;
+        },
+      });
+      log('Monitor 创建成功, sessionId=' + monitor.getSessionId().substring(0, 14));
+
+      log('注册插件...');
+      monitor.use(new AgentHarnessMonitor.ErrorPlugin());
+      monitor.use(new AgentHarnessMonitor.PerformancePlugin());
+      monitor.use(new AgentHarnessMonitor.BehaviorPlugin());
+      log('插件注册完成');
+
+      log('调用 monitor.start()...');
+      monitor.start().then(function() {
+        log('monitor.start() 完成');
+      });
+      log('monitor.start() 已调用（异步）');
+
+    } catch (e) {
+      log('ERROR: ' + e.message + '\n' + e.stack);
+    }
+
+    function triggerError() {
+      log('触发 JS Error...');
+      setTimeout(function() {
+        throw new Error('Debug: 测试错误 ' + Date.now());
+      }, 100);
+    }
+
+    function triggerCustom() {
+      log('触发 Custom Event...');
+      monitor.report({
+        type: 'custom',
+        timestamp: Date.now(),
+        data: { name: 'debug-custom', payload: { ts: Date.now() } },
+      });
+    }
+  </script>
+</body>
+</html>

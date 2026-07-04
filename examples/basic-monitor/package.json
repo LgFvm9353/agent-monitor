@@ -1,0 +1,7 @@
+{
+  "name": "monitor-sdk-demo",
+  "private": true,
+  "scripts": {
+    "start": "npx serve . -p 5500 --no-clipboard"
+  }
+}
