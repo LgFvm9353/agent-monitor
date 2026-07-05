@@ -93,6 +93,9 @@ importers:
         specifier: ^3.23.0
         version: 3.25.76
     devDependencies:
+      '@types/node':
+        specifier: ^26.1.0
+        version: 26.1.0
       tsup:
         specifier: ^8.2.0
         version: 8.5.1(jiti@1.21.7)(postcss@8.5.16)(typescript@5.9.3)

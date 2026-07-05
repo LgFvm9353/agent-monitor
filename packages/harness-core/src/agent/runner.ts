@@ -224,6 +224,7 @@ export class AgentRunner {
       yield { type: 'step-start', stepIndex };
 
       let fullContent = '';
+      let reasoningContent = '';
       const accumulator = new StreamAccumulator();
 
       try {
@@ -237,6 +238,11 @@ export class AgentRunner {
           if (chunk.content) {
             fullContent += chunk.content;
             yield { type: 'text-delta', content: chunk.content };
+          }
+
+          // DeepSeek thinking mode: reasoning_content 增量（不在前端展示，但需要传回 API）
+          if (chunk.reasoningContent) {
+            reasoningContent += chunk.reasoningContent;
           }
 
           // Tool call delta（完整或部分）
@@ -281,11 +287,12 @@ export class AgentRunner {
         if (pendingCalls.length > 0) {
           yield { type: 'step-end', stepIndex };
 
-          // 添加 assistant 消息
+          // 添加 assistant 消息（含 reasoning_content 用于 DeepSeek thinking mode）
           messages.push({
             role: 'assistant',
             content: fullContent,
             toolCalls: pendingCalls,
+            ...(reasoningContent && { reasoningContent }),
           });
 
           // 执行每个 tool call
@@ -477,7 +484,7 @@ export class AgentRunner {
         messageSnapshot: ctx.messages.slice(-6).map(m => ({ role: m.role, content: m.content?.substring(0, 200) ?? '' })),
       });
 
-      // 添加 assistant 消息
+      // 添加 assistant 消息（含 reasoning_content 用于 DeepSeek thinking mode）
       ctx.messages.push({
         role: 'assistant',
         content: response.content,
@@ -486,6 +493,7 @@ export class AgentRunner {
           name: tc.name,
           arguments: tc.arguments,
         })),
+        ...(response.reasoningContent && { reasoningContent: response.reasoningContent }),
       });
 
       // 检查是否需要执行工具调用

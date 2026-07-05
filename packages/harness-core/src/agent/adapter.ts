@@ -164,6 +164,7 @@ export function createOpenAIAdapter(config: OpenAIConfig): ModelAdapter {
           })) }),
           ...(m.toolCallId && { tool_call_id: m.toolCallId }),
           ...(m.name && { name: m.name }),
+          ...(m.reasoningContent && { reasoning_content: m.reasoningContent }),
         })),
         max_tokens: options?.maxTokens,
         temperature: options?.temperature,
@@ -210,6 +211,7 @@ export function createOpenAIAdapter(config: OpenAIConfig): ModelAdapter {
           inputTokens: (data.usage as Record<string, number>)?.prompt_tokens || 0,
           outputTokens: (data.usage as Record<string, number>)?.completion_tokens || 0,
         },
+        reasoningContent: (message?.reasoning_content as string) || undefined,
       };
     },
 
@@ -227,6 +229,9 @@ export function createOpenAIAdapter(config: OpenAIConfig): ModelAdapter {
             type: 'function',
             function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
           })) }),
+          ...(m.toolCallId && { tool_call_id: m.toolCallId }),
+          ...(m.name && { name: m.name }),
+          ...(m.reasoningContent && { reasoning_content: m.reasoningContent }),
         })),
         max_tokens: options?.maxTokens,
         temperature: options?.temperature,
@@ -300,6 +305,11 @@ export function createOpenAIAdapter(config: OpenAIConfig): ModelAdapter {
               // 文本 delta
               if (delta?.content) {
                 yield { content: delta.content };
+              }
+
+              // DeepSeek thinking mode: reasoning_content 增量
+              if (delta?.reasoning_content) {
+                yield { reasoningContent: delta.reasoning_content };
               }
 
               // Tool call delta

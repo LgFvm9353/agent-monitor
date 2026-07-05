@@ -44,6 +44,8 @@ export interface ModelResponse {
     inputTokens: number;
     outputTokens: number;
   };
+  /** DeepSeek thinking mode: reasoning_content */
+  reasoningContent?: string;
 }
 
 /** 流式响应块 */
@@ -51,6 +53,8 @@ export interface ModelStreamChunk {
   content?: string;
   toolCallDelta?: Partial<ToolCall>;
   finishReason?: 'stop' | 'tool_calls' | 'length' | 'error';
+  /** DeepSeek thinking mode: reasoning_content 必须在下轮请求中原样传回 */
+  reasoningContent?: string;
 }
 
 // ===== Agent Messages =====
@@ -61,6 +65,8 @@ export interface AgentMessage {
   name?: string;
   toolCallId?: string;
   toolCalls?: ToolCall[];
+  /** DeepSeek thinking mode: 思维链内容，需要在下轮请求中原样传回 */
+  reasoningContent?: string;
 }
 
 // ===== Tool Calls =====
