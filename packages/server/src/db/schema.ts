@@ -1,5 +1,5 @@
 /**
- * Drizzle ORM Schema — Agent Harness Monitor 数据库设计
+ * Drizzle ORM Schema — Agent Harness Monitor 数据库设计 (MySQL)
  *
  * 表结构：
  * - traces: Agent 执行 Trace 记录
@@ -7,121 +7,141 @@
  * - eval_datasets: 评估数据集
  * - eval_runs: 评估运行记录
  * - monitor_events: 前端监控上报事件
+ * - agent_configs: Agent 配置管理
  */
 
-import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
-import type { SQLJsDatabase } from 'drizzle-orm/sql-js';
+import { mysqlTable, varchar, text, mediumtext, int, bigint, boolean, double, index } from 'drizzle-orm/mysql-core';
+import type { MySql2Database } from 'drizzle-orm/mysql2';
 
 /** DrizzleDB 类型（内部使用） */
-export type DrizzleDB = SQLJsDatabase;
+export type DrizzleDB = MySql2Database<typeof schema>;
 
 // ===== Trace 相关 =====
 
 /** Agent 执行 Trace */
-export const traces = sqliteTable('traces', {
-  id: text('id').primaryKey(),
-  sessionId: text('session_id').notNull(),
-  model: text('model').notNull(),
+export const traces = mysqlTable('traces', {
+  id: varchar('id', { length: 64 }).primaryKey(),
+  sessionId: varchar('session_id', { length: 64 }).notNull(),
+  model: varchar('model', { length: 128 }).notNull(),
   /** JSON string: TraceMetadata */
   metadata: text('metadata').notNull(),
   /** 执行是否成功 */
-  success: integer('success', { mode: 'boolean' }).notNull().default(true),
+  success: boolean('success').notNull().default(true),
   error: text('error'),
   /** Token 消耗 */
-  inputTokens: integer('input_tokens').notNull().default(0),
-  outputTokens: integer('output_tokens').notNull().default(0),
+  inputTokens: int('input_tokens').notNull().default(0),
+  outputTokens: int('output_tokens').notNull().default(0),
   /** 预估费用 USD */
-  estimatedCost: real('estimated_cost').default(0),
+  estimatedCost: double('estimated_cost').default(0),
   /** 执行耗时 ms */
-  durationMs: integer('duration_ms').notNull().default(0),
+  durationMs: int('duration_ms').notNull().default(0),
   /** 用户标签 JSON */
   tags: text('tags'),
-  createdAt: integer('created_at').notNull(),
+  /** 时间戳 (ms) */
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
 });
 
 /** Trace Span 数据 */
-export const traceSpans = sqliteTable('trace_spans', {
-  id: text('id').primaryKey(),
-  traceId: text('trace_id').notNull().references(() => traces.id),
-  parentSpanId: text('parent_span_id'),
-  name: text('name').notNull(),
-  type: text('type').notNull(), // 'agent' | 'llm' | 'tool' | 'middleware'
-  startTime: integer('start_time').notNull(),
-  endTime: integer('end_time').notNull(),
+export const traceSpans = mysqlTable('trace_spans', {
+  id: varchar('id', { length: 64 }).primaryKey(),
+  traceId: varchar('trace_id', { length: 64 }).notNull(),
+  parentSpanId: varchar('parent_span_id', { length: 64 }),
+  name: varchar('name', { length: 255 }).notNull(),
+  type: varchar('type', { length: 32 }).notNull(), // 'agent' | 'llm' | 'tool' | 'middleware'
+  startTime: bigint('start_time', { mode: 'number' }).notNull(),
+  endTime: bigint('end_time', { mode: 'number' }).notNull(),
   /** JSON: input data */
   input: text('input'),
   /** JSON: output data */
   output: text('output'),
-  status: text('status').notNull().default('ok'), // 'ok' | 'error' | 'cancelled'
+  status: varchar('status', { length: 16 }).notNull().default('ok'), // 'ok' | 'error' | 'cancelled'
   statusMessage: text('status_message'),
   /** JSON: extra metadata */
   metadata: text('metadata'),
-});
+}, (table) => ({
+  traceIdIdx: index('idx_trace_spans_trace_id').on(table.traceId),
+}));
 
 // ===== Eval 相关 =====
 
 /** Eval 数据集 */
-export const evalDatasets = sqliteTable('eval_datasets', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
+export const evalDatasets = mysqlTable('eval_datasets', {
+  id: varchar('id', { length: 64 }).primaryKey(),
+  name: varchar('name', { length: 255 }).notNull(),
   description: text('description'),
   /** JSON: EvalItem[] */
-  items: text('items').notNull().default('[]'),
-  createdAt: integer('created_at').notNull(),
-  updatedAt: integer('updated_at').notNull(),
+  items: mediumtext('items').notNull().default('[]'),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
 });
 
 /** Eval 运行记录 */
-export const evalRuns = sqliteTable('eval_runs', {
-  id: text('id').primaryKey(),
-  datasetId: text('dataset_id').notNull().references(() => evalDatasets.id),
+export const evalRuns = mysqlTable('eval_runs', {
+  id: varchar('id', { length: 64 }).primaryKey(),
+  datasetId: varchar('dataset_id', { length: 64 }).notNull(),
   /** JSON: AgentConfig */
   agentConfig: text('agent_config').notNull(),
   /** JSON: EvalScore[] */
-  scores: text('scores').notNull().default('[]'),
-  startTime: integer('start_time').notNull(),
-  endTime: integer('end_time').notNull(),
+  scores: mediumtext('scores').notNull().default('[]'),
+  startTime: bigint('start_time', { mode: 'number' }).notNull(),
+  endTime: bigint('end_time', { mode: 'number' }).notNull(),
   /** 通过率 0-1 */
-  passRate: real('pass_rate').notNull().default(0),
+  passRate: double('pass_rate').notNull().default(0),
   /** JSON: scorer averages */
   scorerAverages: text('scorer_averages').default('{}'),
-});
+}, (table) => ({
+  datasetIdIdx: index('idx_eval_runs_dataset_id').on(table.datasetId),
+}));
 
 // ===== 前端监控事件 =====
 
 /** 前端监控上报事件 */
-export const monitorEvents = sqliteTable('monitor_events', {
-  id: text('id').primaryKey(),
+export const monitorEvents = mysqlTable('monitor_events', {
+  id: varchar('id', { length: 64 }).primaryKey(),
   /** 应用 ID */
-  appId: text('app_id').notNull(),
+  appId: varchar('app_id', { length: 128 }).notNull(),
   /** 事件类型 */
-  type: text('type').notNull(), // 'error' | 'performance' | 'behavior' | 'custom'
+  type: varchar('type', { length: 32 }).notNull(), // 'error' | 'performance' | 'behavior' | 'custom'
   /** JSON: 事件数据 */
-  data: text('data').notNull(),
+  data: mediumtext('data').notNull(),
   /** 页面 URL */
   url: text('url'),
   /** 会话 ID */
-  sessionId: text('session_id'),
+  sessionId: varchar('session_id', { length: 64 }),
   /** User Agent */
   userAgent: text('user_agent'),
   /** SDK 版本 */
-  sdkVersion: text('sdk_version'),
-  /** 时间戳 */
-  timestamp: integer('timestamp').notNull(),
-  /** 接收时间 */
-  receivedAt: integer('received_at').notNull(),
-});
+  sdkVersion: varchar('sdk_version', { length: 32 }),
+  /** 时间戳 (ms) */
+  timestamp: bigint('timestamp', { mode: 'number' }).notNull(),
+  /** 接收时间 (ms) */
+  receivedAt: bigint('received_at', { mode: 'number' }).notNull(),
+}, (table) => ({
+  appIdIdx: index('idx_monitor_events_app_id').on(table.appId),
+  typeIdx: index('idx_monitor_events_type').on(table.type),
+  timestampIdx: index('idx_monitor_events_timestamp').on(table.timestamp),
+}));
 
 // ===== Agent 配置 =====
 
 /** Agent 配置管理 */
-export const agentConfigs = sqliteTable('agent_configs', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
+export const agentConfigs = mysqlTable('agent_configs', {
+  id: varchar('id', { length: 64 }).primaryKey(),
+  name: varchar('name', { length: 255 }).notNull(),
   /** JSON: AgentConfig */
   config: text('config').notNull(),
   /** 是否激活 */
-  active: integer('active', { mode: 'boolean' }).notNull().default(true),
-  createdAt: integer('created_at').notNull(),
-  updatedAt: integer('updated_at').notNull(),
+  active: boolean('active').notNull().default(true),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+  updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
 });
+
+/** 所有表（用于 Drizzle 类型推导） */
+export const schema = {
+  traces,
+  traceSpans,
+  evalDatasets,
+  evalRuns,
+  monitorEvents,
+  agentConfigs,
+};

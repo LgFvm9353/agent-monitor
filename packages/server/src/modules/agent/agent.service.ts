@@ -9,44 +9,49 @@ import {
   type ModelAdapter,
   type StreamEvent,
 } from '@agent-harness/core';
+import { MonitorService } from '../monitor/monitor.service';
+import { createQueryMonitorEventsTool, createGetMonitorStatsTool } from './tools/monitor-tools';
 
 @Injectable()
 export class AgentService {
-  constructor(@Inject(DB_TOKEN) private db: DrizzleDB) {}
+  constructor(
+    @Inject(DB_TOKEN) private db: DrizzleDB,
+    private readonly monitorService: MonitorService,
+  ) {}
 
   // ===== Config CRUD =====
 
   async listConfigs() {
-    return this.db.select().from(agentConfigs).where(eq(agentConfigs.active, true)).all();
+    return this.db.select().from(agentConfigs).where(eq(agentConfigs.active, true));
   }
 
   async getConfig(id: string) {
-    return this.db.select().from(agentConfigs).where(eq(agentConfigs.id, id)).get();
+    const rows = await this.db.select().from(agentConfigs)
+      .where(eq(agentConfigs.id, id)).limit(1);
+    return rows[0] || null;
   }
 
   async createConfig(name: string, config: Record<string, unknown>) {
     const id = `cfg-${Date.now().toString(36)}`;
     const now = Date.now();
-    this.db.insert(agentConfigs).values({
+    await this.db.insert(agentConfigs).values({
       id, name, config: JSON.stringify(config),
       active: true, createdAt: now, updatedAt: now,
-    }).run();
+    });
     return this.getConfig(id);
   }
 
   async updateConfig(id: string, config: Record<string, unknown>) {
-    this.db.update(agentConfigs)
+    await this.db.update(agentConfigs)
       .set({ config: JSON.stringify(config), updatedAt: Date.now() })
-      .where(eq(agentConfigs.id, id))
-      .run();
+      .where(eq(agentConfigs.id, id));
     return this.getConfig(id);
   }
 
   async deleteConfig(id: string) {
-    this.db.update(agentConfigs)
+    await this.db.update(agentConfigs)
       .set({ active: false, updatedAt: Date.now() })
-      .where(eq(agentConfigs.id, id))
-      .run();
+      .where(eq(agentConfigs.id, id));
     return { deleted: id };
   }
 
@@ -111,10 +116,21 @@ export class AgentService {
       baseURL: config.baseURL || process.env.OPENAI_BASE_URL,
     });
 
-    // 注册工具
-    if (config.tools) {
-      runner.withTools(config.tools);
-    }
+    // 注册工具（默认注入监控数据查询工具）
+    const monitorTools: Record<string, {
+      execute: (args: Record<string, unknown>) => Promise<unknown>;
+      description: string;
+      parameters: Record<string, unknown>;
+    }> = {
+      queryMonitorEvents: createQueryMonitorEventsTool(this.monitorService),
+      getMonitorStats: createGetMonitorStatsTool(this.monitorService),
+    };
+
+    const allTools = config.tools
+      ? { ...monitorTools, ...config.tools }
+      : monitorTools;
+
+    runner.withTools(allTools);
 
     // 执行
     yield* runner.runStream(input, {

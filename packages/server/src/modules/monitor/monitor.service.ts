@@ -19,7 +19,7 @@ export class MonitorService {
     const now = Date.now();
     for (const event of events) {
       try {
-        this.db.insert(monitorEvents).values({
+        await this.db.insert(monitorEvents).values({
           id: event.eventId,
           appId: event.meta?.appId || 'unknown',
           type: event.type,
@@ -30,9 +30,13 @@ export class MonitorService {
           sdkVersion: event.meta?.sdkVersion || '',
           timestamp: event.timestamp,
           receivedAt: now,
-        }).run();
-      } catch {
-        // 忽略重复事件
+        });
+      } catch (err) {
+        const msg = (err as Error).message || '';
+        // ER_DUP_ENTRY = 主键/唯一键冲突，属于正常去重
+        if (!msg.includes('ER_DUP_ENTRY') && !msg.includes('Duplicate entry')) {
+          console.error('[MonitorService] insert failed:', event.eventId, msg);
+        }
       }
     }
     return { received: events.length };
@@ -44,28 +48,24 @@ export class MonitorService {
     if (appId) conditions.push(eq(monitorEvents.appId, appId));
     if (type) conditions.push(eq(monitorEvents.type, type));
 
-    if (conditions.length > 0) {
-      return this.db.select().from(monitorEvents)
-        .where(and(...conditions))
-        .orderBy(desc(monitorEvents.timestamp))
-        .limit(limit).offset(offset)
-        .all();
-    }
-    return this.db.select().from(monitorEvents)
+    const base = this.db.select().from(monitorEvents)
       .orderBy(desc(monitorEvents.timestamp))
-      .limit(limit).offset(offset)
-      .all();
+      .limit(limit).offset(offset);
+
+    if (conditions.length > 0) {
+      return base.where(and(...conditions));
+    }
+    return base;
   }
 
   /** 按类型统计（支持按 appId 过滤） */
   async getEventStats(appId?: string) {
     let all;
     if (appId) {
-      all = this.db.select().from(monitorEvents)
-        .where(eq(monitorEvents.appId, appId))
-        .all();
+      all = await this.db.select().from(monitorEvents)
+        .where(eq(monitorEvents.appId, appId));
     } else {
-      all = this.db.select().from(monitorEvents).all();
+      all = await this.db.select().from(monitorEvents);
     }
     const stats: Record<string, number> = {};
     for (const event of all) {

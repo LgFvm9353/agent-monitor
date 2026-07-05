@@ -13,7 +13,7 @@ export class TraceService {
     success: boolean; error?: string; inputTokens: number; outputTokens: number;
     estimatedCost?: number; durationMs: number; tags?: string; createdAt: number;
   }) {
-    return this.db.insert(traces).values(data).run();
+    return this.db.insert(traces).values(data);
   }
 
   async saveSpan(data: {
@@ -21,42 +21,44 @@ export class TraceService {
     startTime: number; endTime: number; input?: string; output?: string;
     status: string; statusMessage?: string; metadata?: string;
   }) {
-    return this.db.insert(traceSpans).values(data).run();
+    return this.db.insert(traceSpans).values(data);
   }
 
   async listTraces(limit = 50, offset = 0) {
     return this.db.select().from(traces)
-      .orderBy(desc(traces.createdAt)).limit(limit).offset(offset).all();
+      .orderBy(desc(traces.createdAt)).limit(limit).offset(offset);
   }
 
   async getTraceWithSpans(traceId: string) {
-    const trace = this.db.select().from(traces).where(eq(traces.id, traceId)).get();
+    const rows = await this.db.select().from(traces)
+      .where(eq(traces.id, traceId)).limit(1);
+    const trace = rows[0] || null;
     if (!trace) return null;
-    const spans = this.db.select().from(traceSpans)
-      .where(eq(traceSpans.traceId, traceId)).all();
+    const spans = await this.db.select().from(traceSpans)
+      .where(eq(traceSpans.traceId, traceId));
     return { trace, spans };
   }
 
   async getStats() {
-    const allTraces = this.db.select().from(traces).all();
+    const allTraces = await this.db.select().from(traces);
     const total = allTraces.length;
-    const successful = allTraces.filter((t: typeof allTraces[number]) => t.success).length;
+    const successful = allTraces.filter((t) => t.success).length;
     const avgDuration = total > 0
-      ? allTraces.reduce((sum: number, t: typeof allTraces[number]) => sum + t.durationMs, 0) / total
+      ? allTraces.reduce((sum, t) => sum + t.durationMs, 0) / total
       : 0;
     const totalCost = allTraces.reduce(
-      (sum: number, t: typeof allTraces[number]) => sum + (t.estimatedCost || 0), 0,
+      (sum, t) => sum + (t.estimatedCost || 0), 0,
     );
     const modelDistribution: Record<string, number> = {};
-    allTraces.forEach((t: typeof allTraces[number]) => {
+    allTraces.forEach((t) => {
       modelDistribution[t.model] = (modelDistribution[t.model] || 0) + 1;
     });
     return {
       total, successful, failed: total - successful,
       successRate: total > 0 ? successful / total : 0,
       avgDurationMs: Math.round(avgDuration),
-      totalInputTokens: allTraces.reduce((s: number, t: typeof allTraces[number]) => s + t.inputTokens, 0),
-      totalOutputTokens: allTraces.reduce((s: number, t: typeof allTraces[number]) => s + t.outputTokens, 0),
+      totalInputTokens: allTraces.reduce((s, t) => s + t.inputTokens, 0),
+      totalOutputTokens: allTraces.reduce((s, t) => s + t.outputTokens, 0),
       totalEstimatedCost: totalCost, modelDistribution,
     };
   }

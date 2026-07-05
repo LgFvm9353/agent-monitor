@@ -11,19 +11,23 @@ export class EvalService {
   async createDataset(name: string, description?: string) {
     const id = `ds-${Date.now().toString(36)}`;
     const now = Date.now();
-    this.db.insert(evalDatasets).values({
+    await this.db.insert(evalDatasets).values({
       id, name, description: description || '',
       items: '[]', createdAt: now, updatedAt: now,
-    }).run();
-    return this.db.select().from(evalDatasets).where(eq(evalDatasets.id, id)).get();
+    });
+    const rows = await this.db.select().from(evalDatasets)
+      .where(eq(evalDatasets.id, id)).limit(1);
+    return rows[0] || null;
   }
 
   async listDatasets() {
-    return this.db.select().from(evalDatasets).all();
+    return this.db.select().from(evalDatasets);
   }
 
   async getDataset(id: string) {
-    return this.db.select().from(evalDatasets).where(eq(evalDatasets.id, id)).get();
+    const rows = await this.db.select().from(evalDatasets)
+      .where(eq(evalDatasets.id, id)).limit(1);
+    return rows[0] || null;
   }
 
   async addItem(datasetId: string, input: string, expectedOutput?: string, labels?: string[]) {
@@ -38,19 +42,18 @@ export class EvalService {
       labels: labels || [],
     });
 
-    this.db.update(evalDatasets)
+    await this.db.update(evalDatasets)
       .set({ items: JSON.stringify(items), updatedAt: Date.now() })
-      .where(eq(evalDatasets.id, datasetId))
-      .run();
+      .where(eq(evalDatasets.id, datasetId));
 
     return this.getDataset(datasetId);
   }
 
   async listRuns(datasetId?: string) {
     if (datasetId) {
-      return this.db.select().from(evalRuns).where(eq(evalRuns.datasetId, datasetId)).all();
+      return this.db.select().from(evalRuns).where(eq(evalRuns.datasetId, datasetId));
     }
-    return this.db.select().from(evalRuns).all();
+    return this.db.select().from(evalRuns);
   }
 
   async createRun(data: {
@@ -63,7 +66,9 @@ export class EvalService {
     passRate: number;
     scorerAverages: string;
   }) {
-    this.db.insert(evalRuns).values(data).run();
-    return this.db.select().from(evalRuns).where(eq(evalRuns.id, data.id)).get();
+    await this.db.insert(evalRuns).values(data);
+    const rows = await this.db.select().from(evalRuns)
+      .where(eq(evalRuns.id, data.id)).limit(1);
+    return rows[0] || null;
   }
 }
