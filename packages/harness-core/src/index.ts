@@ -15,6 +15,9 @@
  * - StreamAccumulator: 流式工具调用累积器
  * - StepRecorder: 步骤记录与回放
  * - BreakpointManager: 断点调试管理
+ * - TaskPlanner: 任务规划器（Plan-then-Execute）
+ * - WorkflowGraph: 工作流图执行引擎
+ * - Agent Templates: 预构建 Agent（Research / Coding / Debug）
  *
  * @example
  * ```ts
@@ -116,3 +119,44 @@ export type { ToolSandboxConfig } from './guardrail/tool-sandbox';
 export { createBudgetGuard, MODEL_PRICING } from './guardrail/budget-guard';
 export type { BudgetConfig, TokenPricing } from './guardrail/budget-guard';
 export type { Guardrail, GuardResult } from './guardrail/types';
+
+// Planning
+export { TaskPlanner, executePlan } from './planning/planner';
+export type { TaskPlannerOptions, PlannerLLM } from './planning/planner';
+export type {
+  Plan,
+  TaskStep,
+  TaskStatus,
+  PlanStatus,
+  PlannerConfig,
+  PlanningStrategy,
+  PlanningResult,
+} from './planning/types';
+export { sequentialStrategy } from './planning/strategies/sequential';
+export { parallelStrategy } from './planning/strategies/parallel';
+export { createAdaptiveStrategy } from './planning/strategies/adaptive';
+
+// Workflow
+export { WorkflowGraph } from './workflow/graph';
+export type {
+  WorkflowNode,
+  WorkflowGraphDef,
+  NodeType,
+  NodeStatus,
+  Edge,
+  NodeContext,
+  NodeExecutor,
+  WorkflowResult,
+} from './workflow/types';
+export { createLLMNodeExecutor } from './workflow/nodes/llm-node';
+export { createToolNodeExecutor } from './workflow/nodes/tool-node';
+export { createConditionNodeExecutor } from './workflow/nodes/condition-node';
+export { createLoopNodeExecutor } from './workflow/nodes/loop-node';
+
+// Agent Templates
+export { createResearchAgent } from './templates/research';
+export type { ResearchAgentConfig } from './templates/research';
+export { createCodingAgent } from './templates/coding';
+export type { CodingAgentConfig } from './templates/coding';
+export { createDebugAgent } from './templates/debug';
+export type { DebugAgentConfig } from './templates/debug';

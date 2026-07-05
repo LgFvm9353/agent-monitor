@@ -2,14 +2,14 @@
   "name": "@agent-harness/core",
   "version": "0.1.0",
   "description": "Agent Harness 引擎 — Agent Runner、Tool Registry、Middleware、Memory、Eval、Trace",
-  "type": "module",
-  "main": "./src/index.ts",
-  "module": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./src/index.ts",
-      "types": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
     }
   },
   "publishConfig": {
