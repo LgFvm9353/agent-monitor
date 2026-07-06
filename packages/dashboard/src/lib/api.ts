@@ -28,6 +28,7 @@ export interface ChatRequest {
   provider?: 'openai' | 'anthropic';
   temperature?: number;
   maxTokens?: number;
+  sessionId?: string;
   enabledTools?: string[];
 }
 

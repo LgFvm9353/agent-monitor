@@ -69,6 +69,7 @@ export class AgentController {
       provider?: 'openai' | 'anthropic';
       temperature?: number;
       maxTokens?: number;
+      sessionId?: string;
       enabledTools?: string[];
     },
     @Res() res: { setHeader: (k: string, v: string) => void; flushHeaders: () => void; write: (d: string) => void; end: () => void; status: (c: number) => { json: (d: unknown) => void } },
@@ -95,6 +96,7 @@ export class AgentController {
         provider: body.provider,
         temperature: body.temperature,
         maxTokens: body.maxTokens,
+        sessionId: body.sessionId,
         enabledTools: body.enabledTools,
       });
 

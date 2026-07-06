@@ -9,7 +9,7 @@
  */
 
 import { useState, useRef } from 'react';
-import { Send, Settings, Loader2, Wrench, ChevronRight, ChevronDown, Check, X, Square } from 'lucide-react';
+import { Send, Settings, Loader2, Wrench, ChevronRight, ChevronDown, Check, X, Square, Plus } from 'lucide-react';
 import { api } from '../../lib/api';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
@@ -77,6 +77,7 @@ export function PlaygroundPage() {
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const toolMsgIndices = useRef<Map<string, number>>(new Map());
+  const sessionIdRef = useRef<string>(`sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
 
   const handleSend = async () => {
     if (!userInput.trim() || loading) return;
@@ -99,6 +100,7 @@ export function PlaygroundPage() {
         systemPrompt,
         modelId,
         temperature,
+        sessionId: sessionIdRef.current,
         enabledTools: [...enabledTools],
       });
 
@@ -226,14 +228,32 @@ export function PlaygroundPage() {
     setExpandedTools(new Set());
   };
 
+  const handleNewSession = () => {
+    setMessages([]);
+    resetToolState();
+    // 生成新的 sessionId，让后端也从新的记忆开始
+    sessionIdRef.current = `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  };
+
   return (
     <div className="flex h-[calc(100vh-100px)] gap-4">
       {/* Configuration Panel */}
       <div className="w-80 flex-shrink-0 space-y-4 overflow-auto">
-        <h3 className="text-lg font-semibold flex items-center gap-2 text-foreground">
-          <Settings className="w-4 h-4" />
-          Configuration
-        </h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold flex items-center gap-2 text-foreground">
+            <Settings className="w-4 h-4" />
+            Configuration
+          </h3>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleNewSession}
+            title="开始新会话（清空记忆）"
+          >
+            <Plus className="w-3.5 h-3.5 mr-1" />
+            New Chat
+          </Button>
+        </div>
 
         {/* System Prompt */}
         <div>

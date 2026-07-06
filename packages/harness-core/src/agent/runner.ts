@@ -80,10 +80,27 @@ export class AgentRunner {
     return this;
   }
 
-  /** 设置记忆 */
+  /** 设置记忆配置 */
   withMemory(config?: AgentConfig['memory']): this {
     this.memory.configure(config);
     return this;
+  }
+
+  /**
+   * 注入外部 MemoryManager（用于跨请求的会话级记忆持久化）
+   *
+   * 使用场景：服务端维护 sessionId → MemoryManager 映射，
+   * 每个请求从映射中取出对应的 MemoryManager 注入到新创建的 AgentRunner，
+   * 这样 Agent 就能"记住"之前的对话。
+   */
+  withExternalMemory(memory: MemoryManager): this {
+    this.memory = memory;
+    return this;
+  }
+
+  /** 获取当前的 MemoryManager（用于在 run/runStream 结束后保存消息） */
+  getMemory(): MemoryManager {
+    return this.memory;
   }
 
   /** 注册安全护栏 */

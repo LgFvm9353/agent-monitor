@@ -6,6 +6,7 @@ import { agentConfigs } from '../../db/schema';
 import {
   AgentRunner,
   createOpenAIAdapter,
+  MemoryManager,
   type ModelAdapter,
   type StreamEvent,
 } from '@agent-harness/core';
@@ -15,11 +16,25 @@ import { createQueryMonitorEventsTool, createGetMonitorStatsTool } from './tools
 
 @Injectable()
 export class AgentService {
+  /** 会话级记忆存储：sessionId → MemoryManager */
+  private sessionMemories = new Map<string, MemoryManager>();
+
   constructor(
     @Inject(DB_TOKEN) private db: DrizzleDB,
     private readonly monitorService: MonitorService,
     private readonly traceService: TraceService,
   ) {}
+
+  /** 获取或创建会话记忆 */
+  private getSessionMemory(sessionId: string): MemoryManager {
+    let memory = this.sessionMemories.get(sessionId);
+    if (!memory) {
+      memory = new MemoryManager();
+      memory.configure({ type: 'buffer', maxTurns: 20 });
+      this.sessionMemories.set(sessionId, memory);
+    }
+    return memory;
+  }
 
   // ===== Config CRUD =====
 
@@ -97,6 +112,7 @@ export class AgentService {
       systemPrompt?: string;
       temperature?: number;
       maxTokens?: number;
+      sessionId?: string;
       enabledTools?: string[];
       tools?: Record<string, {
         execute: (args: Record<string, unknown>) => Promise<unknown>;
@@ -153,9 +169,13 @@ export class AgentService {
 
     runner.withTools(allTools);
 
+    // ===== 会话记忆 =====
+    const sessionId = config.sessionId || `sess-${Date.now().toString(36)}`;
+    const sessionMemory = this.getSessionMemory(sessionId);
+    runner.withExternalMemory(sessionMemory);
+
     // ===== Trace 记录 =====
     const traceId = `trace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    const sessionId = `sess-${Date.now().toString(36)}`;
     const traceStartTime = Date.now();
 
     // 保存初始 trace 记录
@@ -190,6 +210,13 @@ export class AgentService {
     }
     const spanTimings = new Map<string, SpanTiming>();
     let currentStepSpanId: string | null = null;
+
+    // 消息跟踪（用于会话记忆持久化）
+    let assistantOutput = '';
+    const toolCallsMade: Array<{ id: string; name: string; arguments: Record<string, unknown> }> = [];
+    const toolMessages: Array<{ id: string; name: string; result: unknown; error?: string }> = [];
+    const pendingToolArgs = new Map<string, string>(); // id → 累积的 args JSON
+    const pendingToolNames = new Map<string, string>(); // id → name
 
     // 执行
     const stream = runner.runStream(input, {
@@ -230,6 +257,32 @@ export class AgentService {
               status: 'ok',
               parentSpanId: currentStepSpanId || undefined,
             });
+            // 跟踪 tool call 信息（用于记忆持久化）
+            pendingToolArgs.set(event.id, '');
+            pendingToolNames.set(event.id, event.name);
+            break;
+          }
+          case 'tool-call-args': {
+            // 累积工具调用参数
+            const existing = pendingToolArgs.get(event.id) || '';
+            pendingToolArgs.set(event.id, existing + event.args);
+            break;
+          }
+          case 'tool-call-end': {
+            // 解析完成的工具调用参数
+            const argsStr = pendingToolArgs.get(event.id) || '{}';
+            const toolName = pendingToolNames.get(event.id) || '';
+            try {
+              const args = JSON.parse(argsStr);
+              toolCallsMade.push({ id: event.id, name: toolName, arguments: args });
+            } catch {
+              toolCallsMade.push({ id: event.id, name: toolName, arguments: {} });
+            }
+            break;
+          }
+          case 'text-delta': {
+            // 累积 assistant 输出（用于会话记忆）
+            assistantOutput += event.content;
             break;
           }
           case 'tool-result': {
@@ -245,6 +298,8 @@ export class AgentService {
                 timing.statusMessage = event.error;
               }
             }
+            // 记录工具消息（用于会话记忆）
+            toolMessages.push({ id: event.id, name: event.name, result: event.result, error: event.error });
             break;
           }
           case 'done': {
@@ -287,6 +342,38 @@ export class AgentService {
             } catch (err) {
               console.error('Failed to update trace:', err);
             }
+
+            // ===== 保存消息到会话记忆 =====
+            // API 要求的消息顺序: assistant(tool_calls) → tool(tool_call_id) → assistant(text)
+            sessionMemory.addMessage({ role: 'user', content: input });
+
+            const hasToolCalls = event.toolCalls && event.toolCalls.length > 0;
+            if (hasToolCalls) {
+              // 工具调用的 assistant 消息（content 为空，携带 tool_calls）
+              sessionMemory.addMessage({
+                role: 'assistant',
+                content: '',
+                toolCalls: event.toolCalls.map(tc => ({
+                  id: tc.id,
+                  name: tc.name,
+                  arguments: tc.arguments,
+                })),
+              });
+              // 工具结果消息
+              for (const tm of toolMessages) {
+                sessionMemory.addMessage({
+                  role: 'tool',
+                  content: tm.error || JSON.stringify(tm.result),
+                  name: tm.name,
+                  toolCallId: tm.id,
+                });
+              }
+            }
+
+            // 最终文本响应
+            if (assistantOutput) {
+              sessionMemory.addMessage({ role: 'assistant', content: assistantOutput });
+            }
             break;
           }
           case 'error': {
@@ -323,6 +410,36 @@ export class AgentService {
               });
             } catch (err) {
               console.error('Failed to update trace on error:', err);
+            }
+
+            // ===== 保存已有消息到会话记忆 =====
+            sessionMemory.addMessage({ role: 'user', content: input });
+
+            if (toolCallsMade.length > 0) {
+              // 工具调用的 assistant 消息
+              sessionMemory.addMessage({
+                role: 'assistant',
+                content: '',
+                toolCalls: toolCallsMade.map(tc => ({
+                  id: tc.id,
+                  name: tc.name,
+                  arguments: tc.arguments,
+                })),
+              });
+              // 工具结果消息
+              for (const tm of toolMessages) {
+                sessionMemory.addMessage({
+                  role: 'tool',
+                  content: tm.error || JSON.stringify(tm.result),
+                  name: tm.name,
+                  toolCallId: tm.id,
+                });
+              }
+            }
+
+            // 已累积的文本
+            if (assistantOutput) {
+              sessionMemory.addMessage({ role: 'assistant', content: assistantOutput });
             }
             break;
           }
