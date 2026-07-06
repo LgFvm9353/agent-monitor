@@ -54,7 +54,11 @@ export const api = {
   getEvalRuns: (datasetId?: string) =>
     request(`/eval/runs${datasetId ? `?datasetId=${datasetId}` : ''}`),
 
-  // Agent
+  // Agent Sessions
+  getSessions: () => request('/agent/sessions'),
+  getSession: (id: string) => request(`/agent/sessions/${id}`),
+
+  // Agent Configs
   getAgentConfigs: () => request('/agent/configs'),
   getAgentConfig: (id: string) => request(`/agent/configs/${id}`),
   createAgentConfig: (name: string, config: Record<string, unknown>) =>

@@ -35,6 +35,22 @@ export class AgentController {
     return this.agentService.deleteConfig(id);
   }
 
+  // ===== Session Management =====
+
+  /** 列出所有活跃会话 */
+  @Get('sessions')
+  async listSessions() {
+    return this.agentService.listSessions();
+  }
+
+  /** 获取指定会话的消息历史 */
+  @Get('sessions/:id')
+  async getSession(@Param('id') id: string) {
+    const data = this.agentService.getSessionMessages(id);
+    if (!data) return { code: 404, message: 'Session not found' };
+    return data;
+  }
+
   // ===== Agent Chat (SSE Streaming) =====
 
   /**

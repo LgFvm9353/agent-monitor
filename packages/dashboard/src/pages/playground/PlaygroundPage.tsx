@@ -8,7 +8,7 @@
  * - Tool 开关面板
  */
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Send, Settings, Loader2, Wrench, ChevronRight, ChevronDown, Check, X, Square, Plus } from 'lucide-react';
 import { api } from '../../lib/api';
 import { Card, CardContent } from '../../components/ui/Card';
@@ -33,6 +33,41 @@ const AVAILABLE_TOOLS = [
   { id: 'queryMonitorEvents', label: 'queryMonitorEvents', description: '查询监控事件' },
   { id: 'getMonitorStats', label: 'getMonitorStats', description: '获取监控统计' },
 ];
+
+const STORAGE_SESSION_INDEX = 'playground_sessions';    // JSON: string[]
+const STORAGE_CURRENT_SESSION = 'playground_session_id'; // string
+const MSG_PREFIX = 'playground_msgs_';                  // + sessionId
+
+function loadSessionIndex(): string[] {
+  try { return JSON.parse(localStorage.getItem(STORAGE_SESSION_INDEX) || '[]'); } catch { return []; }
+}
+function saveSessionIndex(ids: string[]) {
+  localStorage.setItem(STORAGE_SESSION_INDEX, JSON.stringify(ids));
+}
+function getOrCreateSessionId(): string {
+  const stored = localStorage.getItem(STORAGE_CURRENT_SESSION);
+  if (stored) return stored;
+  const newId = `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  localStorage.setItem(STORAGE_CURRENT_SESSION, newId);
+  // 加入索引
+  const idx = loadSessionIndex();
+  if (!idx.includes(newId)) { idx.unshift(newId); saveSessionIndex(idx); }
+  return newId;
+}
+function loadMessages(sid: string): ChatMessage[] {
+  try { return JSON.parse(localStorage.getItem(MSG_PREFIX + sid) || '[]'); } catch { return []; }
+}
+function saveMessages(sid: string, msgs: ChatMessage[]) {
+  try { localStorage.setItem(MSG_PREFIX + sid, JSON.stringify(msgs)); } catch { /* ignore */ }
+}
+
+interface SessionInfo {
+  sessionId: string;
+  title: string;
+  messageCount: number;
+  lastActive: number;
+  modelId: string;
+}
 
 /** 根据工具名生成可读的摘要 */
 function formatResultSummary(toolName: string, result: unknown): string {
@@ -72,12 +107,60 @@ export function PlaygroundPage() {
   const [temperature, setTemperature] = useState(0.7);
   const [enabledTools, setEnabledTools] = useState<Set<string>>(new Set(AVAILABLE_TOOLS.map((t) => t.id)));
   const [userInput, setUserInput] = useState('');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    const sid = getOrCreateSessionId();
+    return loadMessages(sid);
+  });
   const [loading, setLoading] = useState(false);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const toolMsgIndices = useRef<Map<string, number>>(new Map());
-  const sessionIdRef = useRef<string>(`sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`);
+  const [sessionId, setSessionId] = useState<string>(getOrCreateSessionId);
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+
+  // 消息变化时自动持久化到 localStorage
+  useEffect(() => {
+    saveMessages(sessionId, messages);
+  }, [messages, sessionId]);
+
+  // 加载会话列表（localStorage 为主源，服务端补充标题等信息）
+  useEffect(() => {
+    // 先从 localStorage 索引构建基础列表
+    const idx = loadSessionIndex();
+    const localSessions: SessionInfo[] = idx.map((id) => {
+      const msgs = loadMessages(id);
+      const firstUserMsg = msgs.find(m => m.role === 'user');
+      return {
+        sessionId: id,
+        title: firstUserMsg ? firstUserMsg.content.slice(0, 30) + (firstUserMsg.content.length > 30 ? '...' : '') : 'New Chat',
+        messageCount: msgs.length,
+        lastActive: 0,
+        modelId: '',
+      };
+    });
+    // 确保当前 session 在列表中
+    if (!localSessions.find(s => s.sessionId === sessionId)) {
+      localSessions.unshift({
+        sessionId,
+        title: 'New Chat',
+        messageCount: 0,
+        lastActive: Date.now(),
+        modelId: '',
+      });
+    }
+    setSessions(localSessions);
+
+    // 服务端补充（标题、模型等），静默失败
+    api.getSessions().then((data) => {
+      const serverList = data as SessionInfo[];
+      if (serverList.length > 0) {
+        setSessions((prev) => prev.map((s) => {
+          const server = serverList.find((ss: SessionInfo) => ss.sessionId === s.sessionId);
+          return server ? { ...s, title: server.title || s.title, messageCount: server.messageCount, modelId: server.modelId } : s;
+        }));
+      }
+    }).catch(() => {});
+  }, [sessionId]);
 
   const handleSend = async () => {
     if (!userInput.trim() || loading) return;
@@ -100,7 +183,7 @@ export function PlaygroundPage() {
         systemPrompt,
         modelId,
         temperature,
-        sessionId: sessionIdRef.current,
+        sessionId,
         enabledTools: [...enabledTools],
       });
 
@@ -228,11 +311,29 @@ export function PlaygroundPage() {
     setExpandedTools(new Set());
   };
 
+  const switchSession = (targetId: string) => {
+    if (targetId === sessionId) return;
+    // 保存当前会话消息
+    saveMessages(sessionId, messages);
+    // 加载目标会话消息
+    const targetMsgs = loadMessages(targetId);
+    setMessages(targetMsgs);
+    setSessionId(targetId);
+    localStorage.setItem(STORAGE_CURRENT_SESSION, targetId);
+    resetToolState();
+  };
+
   const handleNewSession = () => {
     setMessages([]);
     resetToolState();
-    // 生成新的 sessionId，让后端也从新的记忆开始
-    sessionIdRef.current = `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    // 生成新的 sessionId
+    const newId = `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    localStorage.setItem(STORAGE_CURRENT_SESSION, newId);
+    const idx = loadSessionIndex();
+    idx.unshift(newId);
+    saveSessionIndex(idx);
+    saveMessages(newId, []);
+    setSessionId(newId);
   };
 
   return (
@@ -254,6 +355,33 @@ export function PlaygroundPage() {
             New Chat
           </Button>
         </div>
+
+        {/* Session List */}
+        {sessions.length > 1 && (
+          <div>
+            <label className="text-xs font-medium text-foreground block mb-1.5 uppercase tracking-wider">
+              History
+            </label>
+            <div className="space-y-0.5 max-h-40 overflow-y-auto">
+              {sessions.map((s) => (
+                <button
+                  key={s.sessionId}
+                  onClick={() => switchSession(s.sessionId)}
+                  className={`w-full text-left px-2 py-1.5 rounded text-xs transition-colors ${
+                    s.sessionId === sessionId
+                      ? 'bg-primary/10 border border-primary/30'
+                      : 'hover:bg-accent border border-transparent'
+                  }`}
+                >
+                  <div className="text-foreground truncate font-medium">{s.title}</div>
+                  <div className="text-muted-foreground mt-0.5">
+                    {s.messageCount} msgs · {s.modelId}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* System Prompt */}
         <div>

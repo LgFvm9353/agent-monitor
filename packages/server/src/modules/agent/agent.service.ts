@@ -16,8 +16,13 @@ import { createQueryMonitorEventsTool, createGetMonitorStatsTool } from './tools
 
 @Injectable()
 export class AgentService {
-  /** 会话级记忆存储：sessionId → MemoryManager */
-  private sessionMemories = new Map<string, MemoryManager>();
+  /** 会话数据 */
+  private sessionMemories = new Map<string, {
+    memory: MemoryManager;
+    title: string;
+    lastActive: number;
+    modelId: string;
+  }>();
 
   constructor(
     @Inject(DB_TOKEN) private db: DrizzleDB,
@@ -26,14 +31,57 @@ export class AgentService {
   ) {}
 
   /** 获取或创建会话记忆 */
-  private getSessionMemory(sessionId: string): MemoryManager {
-    let memory = this.sessionMemories.get(sessionId);
-    if (!memory) {
-      memory = new MemoryManager();
-      memory.configure({ type: 'buffer', maxTurns: 20 });
-      this.sessionMemories.set(sessionId, memory);
+  private getSessionMemory(sessionId: string, modelId?: string): MemoryManager {
+    let data = this.sessionMemories.get(sessionId);
+    if (!data) {
+      data = {
+        memory: new MemoryManager(),
+        title: '',
+        lastActive: Date.now(),
+        modelId: modelId || 'deepseek-v4-pro',
+      };
+      data.memory.configure({ type: 'buffer', maxTurns: 20 });
+      this.sessionMemories.set(sessionId, data);
     }
-    return memory;
+    data.lastActive = Date.now();
+    return data.memory;
+  }
+
+  // ===== Session Management =====
+
+  /** 列出所有活跃会话 */
+  listSessions() {
+    const sessions: Array<{
+      sessionId: string;
+      title: string;
+      messageCount: number;
+      lastActive: number;
+      modelId: string;
+    }> = [];
+    for (const [sessionId, data] of this.sessionMemories) {
+      const stats = data.memory.getStats();
+      sessions.push({
+        sessionId,
+        title: data.title || 'New Chat',
+        messageCount: stats.messageCount,
+        lastActive: data.lastActive,
+        modelId: data.modelId,
+      });
+    }
+    // 按最后活跃时间倒序
+    sessions.sort((a, b) => b.lastActive - a.lastActive);
+    return sessions;
+  }
+
+  /** 获取指定会话的消息历史 */
+  getSessionMessages(sessionId: string) {
+    const data = this.sessionMemories.get(sessionId);
+    if (!data) return null;
+    return {
+      sessionId,
+      title: data.title || 'New Chat',
+      messages: data.memory.getHistory(),
+    };
   }
 
   // ===== Config CRUD =====
@@ -171,7 +219,7 @@ export class AgentService {
 
     // ===== 会话记忆 =====
     const sessionId = config.sessionId || `sess-${Date.now().toString(36)}`;
-    const sessionMemory = this.getSessionMemory(sessionId);
+    const sessionMemory = this.getSessionMemory(sessionId, modelId);
     runner.withExternalMemory(sessionMemory);
 
     // ===== Trace 记录 =====
@@ -344,6 +392,12 @@ export class AgentService {
             }
 
             // ===== 保存消息到会话记忆 =====
+            // 自动设置会话标题（取第一条用户消息的前 30 个字符）
+            const sessionData = this.sessionMemories.get(sessionId);
+            if (sessionData && !sessionData.title) {
+              sessionData.title = input.slice(0, 30) + (input.length > 30 ? '...' : '');
+            }
+
             // API 要求的消息顺序: assistant(tool_calls) → tool(tool_call_id) → assistant(text)
             sessionMemory.addMessage({ role: 'user', content: input });
 
