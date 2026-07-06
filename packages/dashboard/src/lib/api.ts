@@ -19,6 +19,17 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return json.data || json;
 }
 
+export interface ChatRequest {
+  message: string;
+  systemPrompt?: string;
+  modelId?: string;
+  apiKey?: string;
+  baseURL?: string;
+  provider?: 'openai' | 'anthropic';
+  temperature?: number;
+  maxTokens?: number;
+}
+
 export const api = {
   // Trace
   getTraces: (limit = 50) => request(`/traces?limit=${limit}`),
@@ -32,6 +43,11 @@ export const api = {
     request('/eval/datasets', {
       method: 'POST',
       body: JSON.stringify({ name, description }),
+    }),
+  addDatasetItem: (datasetId: string, item: { input: string; expectedOutput?: string; labels?: string[] }) =>
+    request(`/eval/datasets/${datasetId}/items`, {
+      method: 'POST',
+      body: JSON.stringify(item),
     }),
   getEvalRuns: (datasetId?: string) =>
     request(`/eval/runs${datasetId ? `?datasetId=${datasetId}` : ''}`),
@@ -51,6 +67,14 @@ export const api = {
     }),
   deleteAgentConfig: (id: string) =>
     request(`/agent/configs/${id}`, { method: 'DELETE' }),
+
+  /** SSE 流式聊天 — 返回 Response 供调用方读取 stream */
+  chatStream: (body: ChatRequest) =>
+    fetch(`${BASE_URL}/agent/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
 
   // Monitor
   getMonitorEvents: (type?: string) =>

@@ -19,7 +19,7 @@ export function Layout() {
   return (
     <div className="flex h-screen">
       {/* Sidebar */}
-      <aside className="w-56 border-r border-border bg-card flex-shrink-0">
+      <aside className="w-56 border-r border-border bg-white flex-shrink-0">
         <div className="p-4 border-b border-border">
           <h1 className="text-lg font-bold text-primary flex items-center gap-2">
             <Activity className="w-5 h-5" />
@@ -35,8 +35,8 @@ export function Layout() {
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${
                   isActive
-                    ? 'bg-primary/10 text-primary font-medium'
-                    : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                    ? 'bg-blue-50 text-primary font-medium'
+                    : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900'
                 }`
               }
             >
@@ -48,7 +48,7 @@ export function Layout() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-auto bg-background">
         <div className="p-6">
           <Outlet />
         </div>

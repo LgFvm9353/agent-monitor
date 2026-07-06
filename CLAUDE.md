@@ -10,7 +10,7 @@
 - **语言**: TypeScript (全栈)
 - **SDK 构建**: Rollup
 - **Dashboard**: React 18 + Vite + TailwindCSS + Zustand + shadcn/ui
-- **Backend**: NestJS + Drizzle ORM + SQLite
+- **Backend**: NestJS + Drizzle ORM + MySQL
 - **实时通信**: WebSocket (Socket.IO)
 
 ## 项目结构

@@ -71,11 +71,50 @@ agent-harness-monitor/
 
 - ✅ REST API（Trace / Eval / Agent / Monitor）
 - ✅ WebSocket 实时推送（Trace 流式更新）
-- ✅ SQLite + Drizzle ORM
+- ✅ MySQL 8.0 + Drizzle ORM
 
 ---
 
 ## 快速开始
+
+### 前置条件
+
+- **Node.js** >= 18
+- **pnpm** >= 9
+- **MySQL** >= 8.0（本地或 Docker）
+
+### 数据库初始化
+
+```bash
+# 方式一：直接执行 SQL 脚本
+mysql -u root -p < packages/server/init.sql
+
+# 方式二：Docker 快速启动
+docker run -d --name mysql-agent \\
+  -e MYSQL_ROOT_PASSWORD=root \\
+  -e MYSQL_DATABASE=agent_harness_monitor \\
+  -p 3306:3306 \\
+  mysql:8.0
+
+# 然后执行初始化
+mysql -u root -proot -h 127.0.0.1 < packages/server/init.sql
+```
+
+### 环境变量
+
+```bash
+# 在 packages/server/.env 中配置
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=root
+DB_NAME=agent_harness_monitor
+
+OPENAI_API_KEY=sk-xxx          # Agent 调用所需的 API Key
+OPENAI_BASE_URL=https://api.deepseek.com/v1  # DeepSeek 兼容端点
+```
+
+### 启动
 
 ```bash
 # 安装依赖
@@ -178,7 +217,7 @@ console.log(`Tool calls: ${result.toolCalls.length}`);
 | SDK | TypeScript + Rollup |
 | Harness Core | TypeScript (纯库，零框架依赖) |
 | Dashboard | React 18 + Vite + TailwindCSS + Zustand |
-| Backend | NestJS + Drizzle ORM + SQLite |
+| Backend | NestJS + Drizzle ORM + MySQL |
 | Monorepo | pnpm workspace + Turborepo |
 | Real-time | WebSocket (Socket.IO) |
 | Test | Vitest + Playwright |

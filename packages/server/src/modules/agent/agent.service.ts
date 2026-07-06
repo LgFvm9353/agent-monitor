@@ -10,6 +10,7 @@ import {
   type StreamEvent,
 } from '@agent-harness/core';
 import { MonitorService } from '../monitor/monitor.service';
+import { TraceService } from '../trace/trace.service';
 import { createQueryMonitorEventsTool, createGetMonitorStatsTool } from './tools/monitor-tools';
 
 @Injectable()
@@ -17,6 +18,7 @@ export class AgentService {
   constructor(
     @Inject(DB_TOKEN) private db: DrizzleDB,
     private readonly monitorService: MonitorService,
+    private readonly traceService: TraceService,
   ) {}
 
   // ===== Config CRUD =====
@@ -79,6 +81,8 @@ export class AgentService {
   /**
    * 流式执行 Agent（返回 AsyncGenerator）
    *
+   * 同时持久化 trace 和 span 到数据库，供 Trace Explorer 查询。
+   *
    * @param input - 用户输入
    * @param config - Agent 配置
    * @returns StreamEvent 异步生成器
@@ -101,7 +105,7 @@ export class AgentService {
     },
   ): AsyncGenerator<StreamEvent> {
     const apiKey = config.apiKey || process.env.OPENAI_API_KEY || '';
-    const modelId = config.modelId || 'gpt-4o';
+    const modelId = config.modelId || 'deepseek-v4-pro';
     const provider = config.provider || 'openai';
 
     if (!apiKey) {
@@ -132,12 +136,216 @@ export class AgentService {
 
     runner.withTools(allTools);
 
+    // ===== Trace 记录 =====
+    const traceId = `trace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const sessionId = `sess-${Date.now().toString(36)}`;
+    const traceStartTime = Date.now();
+
+    // 保存初始 trace 记录
+    try {
+      await this.traceService.saveTrace({
+        id: traceId,
+        sessionId,
+        model: modelId,
+        metadata: JSON.stringify({ provider, temperature: config.temperature, systemPrompt: config.systemPrompt?.slice(0, 200) }),
+        success: false,
+        inputTokens: 0,
+        outputTokens: 0,
+        estimatedCost: 0,
+        durationMs: 0,
+        createdAt: traceStartTime,
+      });
+    } catch (err) {
+      console.error('Failed to save initial trace:', err);
+    }
+
+    // Span 时序追踪
+    interface SpanTiming {
+      name: string;
+      type: string;
+      startTime: number;
+      endTime?: number;
+      input?: string;
+      output?: string;
+      status: string;
+      statusMessage?: string;
+      parentSpanId?: string;
+    }
+    const spanTimings = new Map<string, SpanTiming>();
+    let currentStepSpanId: string | null = null;
+
     // 执行
-    yield* runner.runStream(input, {
+    const stream = runner.runStream(input, {
       model: modelId,
       systemPrompt: config.systemPrompt || 'You are a helpful AI assistant.',
       temperature: config.temperature,
       maxTokens: config.maxTokens,
     });
+
+    try {
+      for await (const event of stream) {
+        // 追踪 span 时序
+        switch (event.type) {
+          case 'step-start': {
+            const spanId = `span-${traceId}-step-${event.stepIndex}`;
+            currentStepSpanId = spanId;
+            spanTimings.set(spanId, {
+              name: `LLM Call #${event.stepIndex + 1}`,
+              type: 'llm',
+              startTime: Date.now(),
+              status: 'ok',
+            });
+            break;
+          }
+          case 'step-end': {
+            if (currentStepSpanId) {
+              const timing = spanTimings.get(currentStepSpanId);
+              if (timing) timing.endTime = Date.now();
+            }
+            break;
+          }
+          case 'tool-call-start': {
+            const spanId = `span-${traceId}-tool-${event.id}`;
+            spanTimings.set(spanId, {
+              name: `Tool: ${event.name}`,
+              type: 'tool',
+              startTime: Date.now(),
+              status: 'ok',
+              parentSpanId: currentStepSpanId || undefined,
+            });
+            break;
+          }
+          case 'tool-result': {
+            const spanId = `span-${traceId}-tool-${event.id}`;
+            const timing = spanTimings.get(spanId);
+            if (timing) {
+              timing.endTime = Date.now();
+              timing.output = typeof event.result === 'string'
+                ? event.result.slice(0, 1000)
+                : JSON.stringify(event.result).slice(0, 1000);
+              if (event.error) {
+                timing.status = 'error';
+                timing.statusMessage = event.error;
+              }
+            }
+            break;
+          }
+          case 'done': {
+            // 保存所有 spans
+            const spanPromises: Promise<unknown>[] = [];
+            for (const [spanId, timing] of spanTimings) {
+              spanPromises.push(
+                this.traceService.saveSpan({
+                  id: spanId,
+                  traceId,
+                  parentSpanId: timing.parentSpanId,
+                  name: timing.name,
+                  type: timing.type,
+                  startTime: timing.startTime,
+                  endTime: timing.endTime || Date.now(),
+                  input: timing.input,
+                  output: timing.output,
+                  status: timing.status,
+                  statusMessage: timing.statusMessage,
+                }).catch(err => console.error(`Failed to save span ${spanId}:`, err))
+              );
+            }
+            await Promise.all(spanPromises);
+
+            // 计算费用
+            const inputTokens = event.tokens.input;
+            const outputTokens = event.tokens.output;
+            const estimatedCost = this.estimateCost(modelId, inputTokens, outputTokens);
+            const durationMs = Date.now() - traceStartTime;
+
+            // 更新 trace
+            try {
+              await this.traceService.updateTrace(traceId, {
+                success: true,
+                inputTokens,
+                outputTokens,
+                estimatedCost,
+                durationMs,
+              });
+            } catch (err) {
+              console.error('Failed to update trace:', err);
+            }
+            break;
+          }
+          case 'error': {
+            // 保存已有的 spans
+            const spanPromises: Promise<unknown>[] = [];
+            for (const [spanId, timing] of spanTimings) {
+              if (timing.endTime) {
+                spanPromises.push(
+                  this.traceService.saveSpan({
+                    id: spanId,
+                    traceId,
+                    parentSpanId: timing.parentSpanId,
+                    name: timing.name,
+                    type: timing.type,
+                    startTime: timing.startTime,
+                    endTime: timing.endTime,
+                    status: timing.status,
+                    statusMessage: timing.statusMessage,
+                  }).catch(err => console.error(`Failed to save span ${spanId}:`, err))
+                );
+              }
+            }
+            await Promise.all(spanPromises);
+
+            // 更新 trace 为失败
+            try {
+              await this.traceService.updateTrace(traceId, {
+                success: false,
+                error: event.message,
+                inputTokens: 0,
+                outputTokens: 0,
+                estimatedCost: 0,
+                durationMs: Date.now() - traceStartTime,
+              });
+            } catch (err) {
+              console.error('Failed to update trace on error:', err);
+            }
+            break;
+          }
+        }
+
+        // 透传事件给前端
+        yield event;
+
+        if (event.type === 'done' || event.type === 'error') {
+          return;
+        }
+      }
+    } catch (error) {
+      // 未捕获异常 — 更新 trace 为失败
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      try {
+        await this.traceService.updateTrace(traceId, {
+          success: false,
+          error: errorMsg,
+          inputTokens: 0,
+          outputTokens: 0,
+          estimatedCost: 0,
+          durationMs: Date.now() - traceStartTime,
+        });
+      } catch (err) {
+        console.error('Failed to update trace on exception:', err);
+      }
+      yield { type: 'error', message: errorMsg };
+    }
+  }
+
+  /** DeepSeek 费用估算（单位：USD / 1M tokens） */
+  private estimateCost(modelId: string, inputTokens: number, outputTokens: number): number {
+    const pricing: Record<string, { input: number; output: number }> = {
+      'deepseek-v4-pro': { input: 0.55, output: 2.19 },
+      'deepseek-v4-flash': { input: 0.14, output: 0.55 },
+      'gpt-4o': { input: 2.50, output: 10.00 },
+      'gpt-4o-mini': { input: 0.15, output: 0.60 },
+    };
+    const price = pricing[modelId] || { input: 1.0, output: 4.0 };
+    return (inputTokens / 1_000_000) * price.input + (outputTokens / 1_000_000) * price.output;
   }
 }

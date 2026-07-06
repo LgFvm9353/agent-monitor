@@ -16,6 +16,15 @@ export class TraceService {
     return this.db.insert(traces).values(data);
   }
 
+  /** 更新 Trace 的最终状态（tokens, cost, duration, success） */
+  async updateTrace(id: string, data: {
+    success: boolean; error?: string;
+    inputTokens: number; outputTokens: number;
+    estimatedCost?: number; durationMs: number;
+  }) {
+    return this.db.update(traces).set(data).where(eq(traces.id, id));
+  }
+
   async saveSpan(data: {
     id: string; traceId: string; parentSpanId?: string; name: string; type: string;
     startTime: number; endTime: number; input?: string; output?: string;

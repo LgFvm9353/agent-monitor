@@ -9,32 +9,84 @@
  */
 
 import { useState, useRef } from 'react';
-import { Send, Settings, Loader2, Wrench } from 'lucide-react';
+import { Send, Settings, Loader2, Wrench, ChevronRight, ChevronDown, Check, X, Square } from 'lucide-react';
+import { api } from '../../lib/api';
+import { Card, CardContent } from '../../components/ui/Card';
+import { Button } from '../../components/ui/Button';
+import { Textarea } from '../../components/ui/Textarea';
+import { Select } from '../../components/ui/Select';
+import { Input } from '../../components/ui/Input';
+import { Slider } from '../../components/ui/Slider';
+import { Badge } from '../../components/ui/Badge';
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'tool';
   content: string;
   toolName?: string;
+  toolId?: string;
+  toolStatus?: 'running' | 'done' | 'error';
+  toolResult?: unknown;
 }
+
+/** 内建可用工具列表 */
+const AVAILABLE_TOOLS = [
+  { id: 'queryMonitorEvents', label: 'queryMonitorEvents', description: '查询监控事件' },
+  { id: 'getMonitorStats', label: 'getMonitorStats', description: '获取监控统计' },
+];
+
+/** 根据工具名生成可读的摘要 */
+function formatResultSummary(toolName: string, result: unknown): string {
+  try {
+    if (toolName === 'getMonitorStats') {
+      const r = result as { total: number; byType: Record<string, number> };
+      if (r?.byType) {
+        const parts = Object.entries(r.byType).map(([k, v]) => `${k}: ${v}`);
+        return `总计 ${r.total} 条 (${parts.join(' / ')})`;
+      }
+      return `总计 ${r.total} 条`;
+    }
+    if (toolName === 'queryMonitorEvents') {
+      const r = result as { total: number; events?: Array<{ type: string }> };
+      if (r?.events) {
+        const types = [...new Set(r.events.map((e) => e.type))].join(' / ');
+        return `${r.total} 条事件 (${types})`;
+      }
+      return `${r.total} 条`;
+    }
+  } catch { /* fall through */ }
+  return JSON.stringify(result).substring(0, 80);
+}
+
+const MODELS = [
+  { value: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+  { value: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+  { value: 'gpt-4o', label: 'GPT-4o' },
+  { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+  { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+  { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+];
 
 export function PlaygroundPage() {
   const [systemPrompt, setSystemPrompt] = useState('You are a helpful AI assistant.');
-  const [modelId, setModelId] = useState('gpt-4o');
+  const [modelId, setModelId] = useState('deepseek-v4-pro');
   const [temperature, setTemperature] = useState(0.7);
+  const [enabledTools, setEnabledTools] = useState<Set<string>>(new Set(AVAILABLE_TOOLS.map((t) => t.id)));
   const [userInput, setUserInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
+  const toolMsgIndices = useRef<Map<string, number>>(new Map());
 
   const handleSend = async () => {
     if (!userInput.trim() || loading) return;
 
     const input = userInput;
     setUserInput('');
+    resetToolState();
     setMessages((prev) => [...prev, { role: 'user', content: input }]);
     setLoading(true);
 
-    // 创建一个空的 assistant 消息用于流式填充
     const assistantMsgIndex = messages.length + 1;
     setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
 
@@ -42,16 +94,11 @@ export function PlaygroundPage() {
     abortRef.current = controller;
 
     try {
-      const response = await fetch('http://localhost:3001/api/agent/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: input,
-          systemPrompt,
-          modelId,
-          temperature,
-        }),
-        signal: controller.signal,
+      const response = await api.chatStream({
+        message: input,
+        systemPrompt,
+        modelId,
+        temperature,
       });
 
       if (!response.ok) {
@@ -82,7 +129,6 @@ export function PlaygroundPage() {
 
             switch (event.type) {
               case 'text-delta':
-                // 追加文本到 assistant 消息
                 setMessages((prev) => {
                   const updated = [...prev];
                   const msg = updated[assistantMsgIndex];
@@ -94,25 +140,38 @@ export function PlaygroundPage() {
                 break;
 
               case 'tool-call-start':
-                setMessages((prev) => [...prev, {
-                  role: 'tool',
-                  content: `🔧 Calling ${event.name}...`,
-                  toolName: event.name,
-                }]);
+                setMessages((prev) => {
+                  const idx = prev.length;
+                  toolMsgIndices.current.set(event.id, idx);
+                  return [...prev, {
+                    role: 'tool',
+                    content: '',
+                    toolName: event.name,
+                    toolId: event.id,
+                    toolStatus: 'running',
+                  }];
+                });
                 break;
 
               case 'tool-result':
-                setMessages((prev) => [...prev, {
-                  role: 'tool',
-                  content: event.error
-                    ? `❌ ${event.name}: ${event.error}`
-                    : `✅ ${event.name}: ${JSON.stringify(event.result).substring(0, 200)}`,
-                  toolName: event.name,
-                }]);
+                setMessages((prev) => {
+                  const idx = toolMsgIndices.current.get(event.id);
+                  if (idx === undefined) return prev;
+                  const updated = [...prev];
+                  const summary = event.error
+                    ? event.error
+                    : formatResultSummary(event.name, event.result);
+                  updated[idx] = {
+                    ...updated[idx],
+                    content: summary,
+                    toolStatus: event.error ? 'error' : 'done',
+                    toolResult: event.result,
+                  };
+                  return updated;
+                });
                 break;
 
               case 'done':
-                // 最终输出已在 text-delta 中累积完毕
                 break;
 
               case 'error':
@@ -123,7 +182,7 @@ export function PlaygroundPage() {
                 break;
             }
           } catch {
-            // 忽略解析失败
+            // 忽略解析失败的行
           }
         }
       }
@@ -143,95 +202,176 @@ export function PlaygroundPage() {
     abortRef.current?.abort();
   };
 
+  const toggleToolExpanded = (toolId: string) => {
+    setExpandedTools((prev) => {
+      const next = new Set(prev);
+      if (next.has(toolId)) next.delete(toolId);
+      else next.add(toolId);
+      return next;
+    });
+  };
+
+  const toggleToolEnabled = (toolId: string) => {
+    setEnabledTools((prev) => {
+      const next = new Set(prev);
+      if (next.has(toolId)) next.delete(toolId);
+      else next.add(toolId);
+      return next;
+    });
+  };
+
+  const resetToolState = () => {
+    toolMsgIndices.current.clear();
+    setExpandedTools(new Set());
+  };
+
   return (
     <div className="flex h-[calc(100vh-100px)] gap-4">
       {/* Configuration Panel */}
-      <div className="w-80 flex-shrink-0 space-y-4">
-        <h3 className="text-lg font-semibold flex items-center gap-2">
+      <div className="w-80 flex-shrink-0 space-y-4 overflow-auto">
+        <h3 className="text-lg font-semibold flex items-center gap-2 text-foreground">
           <Settings className="w-4 h-4" />
           Configuration
         </h3>
 
+        {/* System Prompt */}
         <div>
-          <label className="text-sm font-medium text-muted-foreground block mb-1">System Prompt</label>
-          <textarea
-            className="w-full h-48 bg-secondary border border-border rounded-md p-3 text-sm font-mono resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+          <label className="text-sm font-medium text-foreground block mb-1">System Prompt</label>
+          <Textarea
+            className="h-48 font-mono text-sm"
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
           />
         </div>
 
+        {/* Model */}
         <div>
-          <label className="text-sm font-medium text-muted-foreground block mb-1">Model</label>
-          <select
-            className="w-full bg-secondary border border-border rounded-md p-2 text-sm"
-            value={modelId}
-            onChange={(e) => setModelId(e.target.value)}
-          >
-            <option value="gpt-4o">GPT-4o</option>
-            <option value="gpt-4o-mini">GPT-4o Mini</option>
-            <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
-            <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
-            <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="text-sm font-medium text-muted-foreground block mb-1">
-            Temperature: {temperature}
-          </label>
-          <input
-            type="range"
-            min="0"
-            max="2"
-            step="0.1"
-            value={temperature}
-            onChange={(e) => setTemperature(parseFloat(e.target.value))}
-            className="w-full"
-          />
-        </div>
-
-        <div>
-          <label className="text-sm font-medium text-muted-foreground block mb-1">
-            <Wrench className="w-3 h-3 inline mr-1" />
-            Tools (coming soon)
-          </label>
-          <div className="space-y-1 opacity-50">
-            {['search', 'read_file', 'write_file', 'execute_code'].map((tool) => (
-              <label key={tool} className="flex items-center gap-2 text-sm">
-                <input type="checkbox" disabled className="accent-primary" />
-                {tool}
-              </label>
+          <label className="text-sm font-medium text-foreground block mb-1">Model</label>
+          <Select value={modelId} onChange={(e) => setModelId(e.target.value)}>
+            {MODELS.map((m) => (
+              <option key={m.value} value={m.value}>{m.label}</option>
             ))}
+          </Select>
+        </div>
+
+        {/* Temperature */}
+        <Slider
+          label={`Temperature: ${temperature}`}
+          min={0}
+          max={2}
+          step={0.1}
+          value={temperature}
+          onChange={(e) => setTemperature(parseFloat(e.target.value))}
+          minLabel="0"
+          maxLabel="2"
+        />
+
+        {/* Tools */}
+        <div>
+          <label className="text-sm font-medium text-foreground block mb-1.5">
+            <Wrench className="w-3 h-3 inline mr-1" />
+            Tools
+          </label>
+          <div className="space-y-1.5">
+            {AVAILABLE_TOOLS.map((tool) => {
+              const enabled = enabledTools.has(tool.id);
+              return (
+                <label
+                  key={tool.id}
+                  className={`flex items-center gap-2 text-sm p-1.5 rounded cursor-pointer transition-colors ${
+                    enabled ? 'hover:bg-secondary/50' : 'opacity-50 hover:opacity-75'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={enabled}
+                    onChange={() => toggleToolEnabled(tool.id)}
+                    className="accent-primary"
+                  />
+                  <div>
+                    <span className={enabled ? '' : 'line-through'}>{tool.label}</span>
+                    <span className="text-xs text-muted-foreground block">{tool.description}</span>
+                  </div>
+                </label>
+              );
+            })}
           </div>
+          <p className="text-xs text-muted-foreground mt-1.5">
+            {enabledTools.size} of {AVAILABLE_TOOLS.length} tools enabled
+          </p>
         </div>
       </div>
 
       {/* Chat Area */}
-      <div className="flex-1 flex flex-col bg-card border border-border rounded-lg">
+      <Card className="flex-1 flex flex-col">
         <div className="flex-1 overflow-auto p-4 space-y-3">
           {messages.length === 0 && (
-            <div className="flex items-center justify-center h-full text-muted-foreground">
-              Send a message to test the agent...
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center text-foreground">
+                <Wrench className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                <p className="text-base">Send a message to test the agent...</p>
+              </div>
             </div>
           )}
-          {messages.map((msg, i) => (
-            <div
-              key={i}
-              className={`p-3 rounded-lg max-w-[85%] ${
-                msg.role === 'user'
-                  ? 'bg-primary/10 ml-auto'
-                  : msg.role === 'tool'
-                  ? 'bg-yellow-500/10 border border-yellow-500/20 text-xs font-mono'
-                  : 'bg-secondary'
-              }`}
-            >
-              <div className="text-xs text-muted-foreground mb-1">
-                {msg.role === 'user' ? 'You' : msg.role === 'tool' ? `Tool: ${msg.toolName || 'unknown'}` : 'Agent'}
+          {messages.map((msg, i) => {
+            if (msg.role === 'tool') {
+              const isExpanded = expandedTools.has(msg.toolId || '');
+              const isRunning = msg.toolStatus === 'running';
+              const isError = msg.toolStatus === 'error';
+              return (
+                <div key={i} className="flex justify-start max-w-[85%]">
+                  <button
+                    onClick={() => msg.toolId && toggleToolExpanded(msg.toolId)}
+                    className={`text-xs rounded-lg px-3 py-1.5 border transition-colors text-left ${
+                      isError
+                        ? 'bg-red-500/10 border-red-500/30 hover:bg-red-500/20'
+                        : 'bg-blue-500/10 border-blue-500/30 hover:bg-blue-500/20'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 text-foreground">
+                      {isRunning ? (
+                        <Loader2 className="w-3 h-3 animate-spin text-blue-600" />
+                      ) : isError ? (
+                        <X className="w-3 h-3 text-red-500" />
+                      ) : (
+                        <Check className="w-3 h-3 text-emerald-600" />
+                      )}
+                      {isExpanded ? (
+                        <ChevronDown className="w-3 h-3" />
+                      ) : (
+                        <ChevronRight className="w-3 h-3" />
+                      )}
+                      <span className="font-medium">{msg.toolName}</span>
+                      {!isRunning && (
+                        <span className="text-sm text-foreground">{msg.content}</span>
+                      )}
+                    </div>
+                    {isExpanded && msg.toolResult != null && (
+                      <pre className="mt-1.5 text-xs text-foreground whitespace-pre-wrap max-h-48 overflow-auto bg-secondary rounded p-2">
+                        {JSON.stringify(msg.toolResult, null, 2)}
+                      </pre>
+                    )}
+                  </button>
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={i}
+                className={`p-3 rounded-lg max-w-[85%] ${
+                  msg.role === 'user'
+                    ? 'bg-primary/10 ml-auto'
+                    : 'bg-secondary'
+                }`}
+              >
+                <div className="text-xs font-medium text-foreground mb-1">
+                  {msg.role === 'user' ? 'You' : 'Agent'}
+                </div>
+                <div className="text-base whitespace-pre-wrap text-foreground">{msg.content}</div>
               </div>
-              <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
-            </div>
-          ))}
+            );
+          })}
           {loading && (
             <div className="flex items-center gap-2 text-muted-foreground text-sm p-3">
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -240,9 +380,10 @@ export function PlaygroundPage() {
           )}
         </div>
 
+        {/* Input Bar */}
         <div className="border-t border-border p-3 flex gap-2">
-          <input
-            className="flex-1 bg-secondary border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+          <Input
+            className="flex-1"
             placeholder="Type a message..."
             value={userInput}
             onChange={(e) => setUserInput(e.target.value)}
@@ -250,23 +391,17 @@ export function PlaygroundPage() {
             disabled={loading}
           />
           {loading ? (
-            <button
-              onClick={handleStop}
-              className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 transition-colors text-sm"
-            >
+            <Button variant="destructive" onClick={handleStop} size="sm">
+              <Square className="w-4 h-4 mr-1" />
               Stop
-            </button>
+            </Button>
           ) : (
-            <button
-              onClick={handleSend}
-              disabled={!userInput.trim()}
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
-            >
+            <Button onClick={handleSend} disabled={!userInput.trim()} size="sm">
               <Send className="w-4 h-4" />
-            </button>
+            </Button>
           )}
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

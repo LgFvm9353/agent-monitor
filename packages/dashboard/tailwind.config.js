@@ -2,6 +2,10 @@
 export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
+    fontFamily: {
+      sans: ['system-ui', '-apple-system', "'Segoe UI'", "'PingFang SC'", "'Microsoft YaHei'", "'Helvetica Neue'", 'sans-serif'],
+      mono: ['ui-monospace', "'Cascadia Code'", "'Source Code Pro'", 'Menlo', 'Consolas', 'monospace'],
+    },
     extend: {
       colors: {
         border: 'hsl(var(--border))',
@@ -9,6 +13,10 @@ export default {
         ring: 'hsl(var(--ring))',
         background: 'hsl(var(--background))',
         foreground: 'hsl(var(--foreground))',
+        card: {
+          DEFAULT: 'hsl(var(--card))',
+          foreground: 'hsl(var(--card-foreground))',
+        },
         primary: {
           DEFAULT: 'hsl(var(--primary))',
           foreground: 'hsl(var(--primary-foreground))',

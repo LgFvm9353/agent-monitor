@@ -43,7 +43,7 @@ export function TraceExplorerPage() {
       {/* Trace List Sidebar */}
       <div className="w-72 flex-shrink-0">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-lg font-semibold">Traces</h3>
+          <h3 className="text-lg font-semibold text-foreground">Traces</h3>
           <span className={`inline-block w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
         </div>
         <div className="space-y-1 max-h-[calc(100vh-120px)] overflow-y-auto">
@@ -65,13 +65,13 @@ export function TraceExplorerPage() {
               }`}
             >
               <div className="flex justify-between items-center mb-1">
-                <span className="font-mono text-xs text-muted-foreground truncate">{trace.id}</span>
-                <span className={`text-xs ${trace.success ? 'text-green-400' : 'text-red-400'}`}>
+                <span className="font-mono text-sm text-muted-foreground truncate">{trace.id}</span>
+                <span className={`text-sm ${trace.success ? 'text-green-600' : 'text-red-600'}`}>
                   {trace.success ? '✓' : '✗'}
                 </span>
               </div>
-              <div className="text-xs text-muted-foreground">{trace.model} · {trace.durationMs}ms</div>
-              <div className="text-xs text-muted-foreground mt-0.5">
+              <div className="text-sm text-muted-foreground">{trace.model} · {trace.durationMs}ms</div>
+              <div className="text-sm text-muted-foreground mt-0.5">
                 {trace.inputTokens + trace.outputTokens} tokens
                 {trace.estimatedCost ? ` · $${trace.estimatedCost.toFixed(4)}` : ''}
               </div>
@@ -87,15 +87,15 @@ export function TraceExplorerPage() {
             {/* Trace Header */}
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-lg font-semibold font-mono text-sm text-muted-foreground">
+                <h3 className="text-lg font-semibold font-mono text-sm text-foreground">
                   {selectedTrace.id}
                 </h3>
-                <div className="text-sm text-muted-foreground mt-1">
+                <div className="text-sm text-foreground mt-1">
                   Model: {selectedTrace.model} · Duration: {selectedTrace.durationMs}ms ·
                   {selectedTrace.success ? (
-                    <span className="text-green-400"> Success</span>
+                    <span className="text-green-600"> Success</span>
                   ) : (
-                    <span className="text-red-400"> Failed</span>
+                    <span className="text-red-600"> Failed</span>
                   )}
                 </div>
               </div>
@@ -118,11 +118,11 @@ export function TraceExplorerPage() {
                   <div key={span.id} className="flex items-center gap-3 text-sm p-2 rounded hover:bg-accent">
                     <span className={`inline-block w-2 h-2 rounded-full bg-${span.type === 'llm' ? 'purple' : span.type === 'tool' ? 'cyan' : 'indigo'}-500`} />
                     <span className="font-medium min-w-[100px]">{span.name}</span>
-                    <span className="text-muted-foreground text-xs">{span.type}</span>
-                    <span className="text-muted-foreground text-xs ml-auto">
+                    <span className="text-muted-foreground text-sm">{span.type}</span>
+                    <span className="text-muted-foreground text-sm ml-auto">
                       {span.endTime - span.startTime}ms
                     </span>
-                    <span className={`text-xs ${span.status === 'ok' ? 'text-green-400' : 'text-red-400'}`}>
+                    <span className={`text-sm ${span.status === 'ok' ? 'text-green-600' : 'text-red-600'}`}>
                       {span.status}
                     </span>
                   </div>

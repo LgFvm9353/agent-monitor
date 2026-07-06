@@ -16,12 +16,12 @@ export function TokenBar({ inputTokens, outputTokens, cacheHit = 0, maxTokens = 
   return (
     <div className="flex items-center gap-3">
       <div className="text-xs text-muted-foreground">
-        <span className="text-blue-400 font-mono">{inputTokens.toLocaleString()}</span>
+        <span className="text-blue-600 font-mono">{inputTokens.toLocaleString()}</span>
         <span className="mx-1">+</span>
-        <span className="text-purple-400 font-mono">{outputTokens.toLocaleString()}</span>
+        <span className="text-purple-600 font-mono">{outputTokens.toLocaleString()}</span>
         {cacheHit > 0 && (
           <>
-            <span className="mx-1 text-green-400">(cache: {cacheHit.toLocaleString()})</span>
+            <span className="mx-1 text-emerald-600">(cache: {cacheHit.toLocaleString()})</span>
           </>
         )}
         <span className="mx-1">=</span>
