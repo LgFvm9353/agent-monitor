@@ -37,8 +37,11 @@ export interface MiddlewareConfig {
 
 export interface MemoryConfig {
   type: 'buffer' | 'summary' | 'vector';
+  /** 对话历史 token 上限，超出时触发压缩（摘要模式），默认 4000 */
   maxTokens?: number;
   maxTurns?: number;
+  /** 压缩后保留最近 N 轮完整消息（默认 maxTurns） */
+  keepRecentTurns?: number;
 }
 
 // ---------- Agent Trace ----------

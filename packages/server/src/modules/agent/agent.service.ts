@@ -7,6 +7,7 @@ import {
   AgentRunner,
   createOpenAIAdapter,
   MemoryManager,
+  type AgentMessage,
   type ModelAdapter,
   type StreamEvent,
 } from '@agent-harness/core';
@@ -40,7 +41,8 @@ export class AgentService {
         lastActive: Date.now(),
         modelId: modelId || 'deepseek-v4-pro',
       };
-      data.memory.configure({ type: 'buffer', maxTurns: 20 });
+      // 摘要模式：token 超 4000 触发压缩，保留最近 6 轮完整对话
+      data.memory.configure({ type: 'summary', maxTurns: 6, maxTokens: 4000 });
       this.sessionMemories.set(sessionId, data);
     }
     data.lastActive = Date.now();
@@ -178,7 +180,7 @@ export class AgentService {
       return;
     }
 
-    const { runner } = this.createRunner({
+    const { runner, adapter } = this.createRunner({
       provider,
       apiKey,
       modelId,
@@ -428,6 +430,10 @@ export class AgentService {
             if (assistantOutput) {
               sessionMemory.addMessage({ role: 'assistant', content: assistantOutput });
             }
+
+            // ===== 对话摘要压缩（降本 50-70%） =====
+            await this.compressIfNeeded(sessionMemory, adapter);
+
             break;
           }
           case 'error': {
@@ -495,6 +501,10 @@ export class AgentService {
             if (assistantOutput) {
               sessionMemory.addMessage({ role: 'assistant', content: assistantOutput });
             }
+
+            // ===== 对话摘要压缩 =====
+            await this.compressIfNeeded(sessionMemory, adapter);
+
             break;
           }
         }
@@ -523,6 +533,67 @@ export class AgentService {
       }
       yield { type: 'error', message: errorMsg };
     }
+  }
+
+  // ===== 对话摘要压缩 =====
+
+  /** 检查并在需要时触发对话压缩 */
+  private async compressIfNeeded(memory: MemoryManager, adapter: ModelAdapter): Promise<void> {
+    if (!memory.needsCompression()) return;
+
+    const compressible = memory.getCompressibleMessages();
+    if (compressible.length === 0) return;
+
+    const config = memory.getCompressionConfig();
+    console.log(
+      `[AgentService] Compressing: ${config.currentTokens}/${config.maxTokens} tokens (${config.messageCount} msgs → keeping ${config.keepRecent} turns)`,
+    );
+
+    try {
+      const summary = await this.generateSummary(adapter, compressible);
+      memory.applyCompression(summary);
+    } catch (err) {
+      console.error('[AgentService] Summary generation failed, using fallback:', err);
+      // 降级：用简单的文本拼接做摘要
+      const fallback = compressible
+        .filter((m) => m.role !== 'system')
+        .map((m) => `[${m.role}]: ${(m.content || '').substring(0, 200)}`)
+        .join('\n')
+        .substring(0, 500);
+      memory.applyCompression(fallback);
+    }
+  }
+
+  /**
+   * 使用 LLM 生成对话摘要
+   *
+   * 用低 temperature + 低 maxTokens 生成简洁摘要，
+   * 保留关键信息（数字、结论、工具调用结果）。
+   */
+  private async generateSummary(
+    adapter: ModelAdapter,
+    messages: AgentMessage[],
+  ): Promise<string> {
+    const conversation = messages
+      .filter((m) => m.role !== 'system')
+      .map((m) => {
+        const role = m.role === 'tool' ? `tool(${m.name || ''})` : m.role;
+        return `[${role}]: ${(m.content || '').substring(0, 300)}`;
+      })
+      .join('\n');
+
+    const response = await adapter.chat(
+      [
+        {
+          role: 'user',
+          content:
+            `用 2-3 句中文总结以下对话的关键信息，保留具体数字、结论和工具调用结果。只输出摘要本身，不要加前缀：\n\n${conversation}`,
+        },
+      ],
+      { maxTokens: 300, temperature: 0.3 },
+    );
+
+    return response.content.trim();
   }
 
   /** DeepSeek 费用估算（单位：USD / 1M tokens） */
