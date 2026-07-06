@@ -104,7 +104,7 @@ export function TraceExplorerPage() {
 
             {/* Flame Graph */}
             <div className="bg-card border border-border rounded-lg p-4">
-              <h4 className="text-sm font-medium text-muted-foreground mb-3">
+              <h4 className="text-sm font-medium text-foreground mb-3">
                 Trace Timeline (Flame Graph)
               </h4>
               <FlameGraph spans={selectedTraceSpans} />
@@ -112,7 +112,7 @@ export function TraceExplorerPage() {
 
             {/* Span Details */}
             <div className="bg-card border border-border rounded-lg p-4">
-              <h4 className="text-sm font-medium text-muted-foreground mb-3">Span Details</h4>
+              <h4 className="text-sm font-medium text-foreground mb-3">Span Details</h4>
               <div className="space-y-2">
                 {selectedTraceSpans.map((span) => (
                   <div key={span.id} className="flex items-center gap-3 text-sm p-2 rounded hover:bg-accent">

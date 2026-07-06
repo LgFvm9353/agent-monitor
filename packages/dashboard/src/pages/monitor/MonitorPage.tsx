@@ -61,8 +61,8 @@ export function MonitorPage() {
 
   const metricCards = [
     { label: 'Total Events', value: statsValue.total.toLocaleString(), icon: Activity, color: 'text-blue-600' },
-    { label: 'Errors', value: (statsValue.byType?.error || 0).toLocaleString(), icon: AlertTriangle, color: 'text-red-400' },
-    { label: 'Performance', value: (statsValue.byType?.performance || 0).toLocaleString(), icon: Zap, color: 'text-yellow-400' },
+    { label: 'Errors', value: (statsValue.byType?.error || 0).toLocaleString(), icon: AlertTriangle, color: 'text-red-600' },
+    { label: 'Performance', value: (statsValue.byType?.performance || 0).toLocaleString(), icon: Zap, color: 'text-yellow-600' },
     { label: 'Behavior', value: (statsValue.byType?.behavior || 0).toLocaleString(), icon: Clock, color: 'text-emerald-600' },
   ];
 
@@ -94,7 +94,7 @@ export function MonitorPage() {
         {/* Event Type Distribution */}
         <Card>
           <CardContent>
-            <h3 className="text-sm text-muted-foreground mb-2">事件类型分布</h3>
+            <h3 className="text-sm font-medium text-foreground mb-2">事件类型分布</h3>
             {typeChartData.length > 0 ? (
               <DonutChart
                 data={typeChartData}
@@ -113,7 +113,7 @@ export function MonitorPage() {
         {/* Recent Events */}
         <Card>
           <CardContent>
-            <h3 className="text-sm text-muted-foreground mb-2">最近事件</h3>
+            <h3 className="text-sm font-medium text-foreground mb-2">最近事件</h3>
             {events.length > 0 ? (
               <div className="space-y-2 max-h-[240px] overflow-auto">
                 {events.map((event) => {

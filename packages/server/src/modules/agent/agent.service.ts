@@ -97,6 +97,7 @@ export class AgentService {
       systemPrompt?: string;
       temperature?: number;
       maxTokens?: number;
+      enabledTools?: string[];
       tools?: Record<string, {
         execute: (args: Record<string, unknown>) => Promise<unknown>;
         description: string;
@@ -120,8 +121,8 @@ export class AgentService {
       baseURL: config.baseURL || process.env.OPENAI_BASE_URL,
     });
 
-    // 注册工具（默认注入监控数据查询工具）
-    const monitorTools: Record<string, {
+    // 注册工具（根据 enabledTools 过滤）
+    const allMonitorTools: Record<string, {
       execute: (args: Record<string, unknown>) => Promise<unknown>;
       description: string;
       parameters: Record<string, unknown>;
@@ -129,6 +130,22 @@ export class AgentService {
       queryMonitorEvents: createQueryMonitorEventsTool(this.monitorService),
       getMonitorStats: createGetMonitorStatsTool(this.monitorService),
     };
+
+    // 如果前端传了 enabledTools，只启用指定的工具；否则全部启用
+    const monitorTools: Record<string, {
+      execute: (args: Record<string, unknown>) => Promise<unknown>;
+      description: string;
+      parameters: Record<string, unknown>;
+    }> = {};
+    if (config.enabledTools && config.enabledTools.length > 0) {
+      for (const toolId of config.enabledTools) {
+        if (allMonitorTools[toolId]) {
+          monitorTools[toolId] = allMonitorTools[toolId];
+        }
+      }
+    } else {
+      Object.assign(monitorTools, allMonitorTools);
+    }
 
     const allTools = config.tools
       ? { ...monitorTools, ...config.tools }

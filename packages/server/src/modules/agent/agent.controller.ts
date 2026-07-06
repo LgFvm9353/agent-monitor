@@ -69,6 +69,7 @@ export class AgentController {
       provider?: 'openai' | 'anthropic';
       temperature?: number;
       maxTokens?: number;
+      enabledTools?: string[];
     },
     @Res() res: { setHeader: (k: string, v: string) => void; flushHeaders: () => void; write: (d: string) => void; end: () => void; status: (c: number) => { json: (d: unknown) => void } },
   ) {
@@ -94,6 +95,7 @@ export class AgentController {
         provider: body.provider,
         temperature: body.temperature,
         maxTokens: body.maxTokens,
+        enabledTools: body.enabledTools,
       });
 
       for await (const event of stream) {

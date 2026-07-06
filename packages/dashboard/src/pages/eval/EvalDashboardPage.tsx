@@ -139,7 +139,7 @@ export function EvalDashboardPage() {
                   {/* Items list */}
                   {items.length > 0 ? (
                     <div>
-                      <h4 className="text-sm font-medium text-muted-foreground mb-2">Test Cases</h4>
+                      <h4 className="text-sm font-medium text-foreground mb-2">Test Cases</h4>
                       <div className="space-y-2">
                         {items.map((item: { input: string; expectedOutput?: string; id?: string }, idx: number) => (
                           <div key={item.id || idx} className="bg-secondary/50 rounded p-2 text-sm">
@@ -161,7 +161,7 @@ export function EvalDashboardPage() {
 
                   {/* Add item form */}
                   <div className="border-t border-border pt-3 space-y-2">
-                    <h4 className="text-sm font-medium text-muted-foreground">Add Test Case</h4>
+                    <h4 className="text-sm font-medium text-foreground">Add Test Case</h4>
                     <Input
                       placeholder="Input..."
                       value={newItemInput}
@@ -185,7 +185,7 @@ export function EvalDashboardPage() {
                   {/* Dataset runs */}
                   {datasetRuns.length > 0 && (
                     <div className="border-t border-border pt-3">
-                      <h4 className="text-sm font-medium text-muted-foreground mb-2">Recent Runs</h4>
+                      <h4 className="text-sm font-medium text-foreground mb-2">Recent Runs</h4>
                       <div className="space-y-1">
                         {datasetRuns.slice(0, 5).map((run) => (
                           <div key={run.id} className="flex items-center gap-3 text-sm">
@@ -263,7 +263,7 @@ export function EvalDashboardPage() {
             </div>
             <div className="p-4 space-y-3">
               <div>
-                <label className="text-sm font-medium text-muted-foreground block mb-1">Name</label>
+                <label className="text-sm font-medium text-foreground block mb-1">Name</label>
                 <Input
                   placeholder="Dataset name..."
                   value={newName}
@@ -272,7 +272,7 @@ export function EvalDashboardPage() {
                 />
               </div>
               <div>
-                <label className="text-sm font-medium text-muted-foreground block mb-1">
+                <label className="text-sm font-medium text-foreground block mb-1">
                   Description (optional)
                 </label>
                 <Textarea

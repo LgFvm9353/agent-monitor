@@ -99,6 +99,7 @@ export function PlaygroundPage() {
         systemPrompt,
         modelId,
         temperature,
+        enabledTools: [...enabledTools],
       });
 
       if (!response.ok) {
