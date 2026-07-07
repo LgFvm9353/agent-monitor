@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Query, Body } from '@nestjs/common';
+import { Controller, Get, Post, Param, Query, Body, NotFoundException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBody, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { EvalService } from './eval.service';
 import { CreateDatasetDto, AddItemDto } from '../../common/dto';
@@ -25,7 +25,11 @@ export class EvalController {
   @ApiOperation({ summary: '获取单个数据集' })
   @ApiParam({ name: 'id', description: '数据集 ID' })
   async getDataset(@Param('id') id: string) {
-    return this.evalService.getDataset(id);
+    const dataset = await this.evalService.getDataset(id);
+    if (!dataset) {
+      throw new NotFoundException(`Dataset ${id} not found`);
+    }
+    return dataset;
   }
 
   @Post('datasets/:id/items')

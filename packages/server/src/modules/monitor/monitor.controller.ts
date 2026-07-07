@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Query, Body } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { MonitorService } from './monitor.service';
-import { ReportDto } from '../../common/dto';
+import { ReportDto, ListEventsDto } from '../../common/dto';
 
 @ApiTags('monitor')
 @Controller('monitor')
@@ -27,15 +27,15 @@ export class MonitorController {
   @ApiOperation({ summary: '查询监控事件' })
   @ApiQuery({ name: 'appId', required: false, description: '应用 ID' })
   @ApiQuery({ name: 'type', required: false, description: '事件类型（error/performance/behavior/custom）' })
-  @ApiQuery({ name: 'limit', required: false, description: '返回条数（默认 100）' })
+  @ApiQuery({ name: 'limit', required: false, description: '返回条数（1-500，默认 100）' })
   @ApiQuery({ name: 'offset', required: false, description: '偏移量（默认 0）' })
-  async listEvents(
-    @Query('appId') appId?: string,
-    @Query('type') type?: string,
-    @Query('limit') limit = 100,
-    @Query('offset') offset = 0,
-  ) {
-    return this.monitorService.listEvents(appId, type, Number(limit), Number(offset));
+  async listEvents(@Query() query: ListEventsDto) {
+    return this.monitorService.listEvents(
+      query.appId,
+      query.type,
+      query.limit ?? 100,
+      query.offset ?? 0,
+    );
   }
 
   /** 事件统计（可按 appId 过滤） */
