@@ -1,6 +1,9 @@
-import { Controller, Get, Post, Put, Delete, Param, Body, Res, Header } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Param, Body, Res, Header, NotFoundException } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBody, ApiParam } from '@nestjs/swagger';
 import { AgentService } from './agent.service';
+import { CreateConfigDto, UpdateConfigDto, ChatDto } from '../../common/dto';
 
+@ApiTags('agent')
 @Controller('agent')
 export class AgentController {
   constructor(private readonly agentService: AgentService) {}
@@ -8,29 +11,39 @@ export class AgentController {
   // ===== Config CRUD =====
 
   @Get('configs')
+  @ApiOperation({ summary: '列出所有活跃配置' })
   async listConfigs() {
     return this.agentService.listConfigs();
   }
 
   @Get('configs/:id')
+  @ApiOperation({ summary: '获取单个配置' })
+  @ApiParam({ name: 'id', description: '配置 ID' })
   async getConfig(@Param('id') id: string) {
     return this.agentService.getConfig(id);
   }
 
   @Post('configs')
-  async createConfig(@Body() body: { name: string; config: Record<string, unknown> }) {
+  @ApiOperation({ summary: '创建 Agent 配置' })
+  @ApiBody({ type: CreateConfigDto })
+  async createConfig(@Body() body: CreateConfigDto) {
     return this.agentService.createConfig(body.name, body.config);
   }
 
   @Put('configs/:id')
+  @ApiOperation({ summary: '更新 Agent 配置' })
+  @ApiParam({ name: 'id', description: '配置 ID' })
+  @ApiBody({ type: UpdateConfigDto })
   async updateConfig(
     @Param('id') id: string,
-    @Body() body: { config: Record<string, unknown> },
+    @Body() body: UpdateConfigDto,
   ) {
     return this.agentService.updateConfig(id, body.config);
   }
 
   @Delete('configs/:id')
+  @ApiOperation({ summary: '删除配置（软删除）' })
+  @ApiParam({ name: 'id', description: '配置 ID' })
   async deleteConfig(@Param('id') id: string) {
     return this.agentService.deleteConfig(id);
   }
@@ -39,15 +52,18 @@ export class AgentController {
 
   /** 列出所有活跃会话 */
   @Get('sessions')
+  @ApiOperation({ summary: '列出所有活跃会话' })
   async listSessions() {
     return this.agentService.listSessions();
   }
 
   /** 获取指定会话的消息历史 */
   @Get('sessions/:id')
+  @ApiOperation({ summary: '获取会话消息历史' })
+  @ApiParam({ name: 'id', description: '会话 ID' })
   async getSession(@Param('id') id: string) {
     const data = this.agentService.getSessionMessages(id);
-    if (!data) return { code: 404, message: 'Session not found' };
+    if (!data) throw new NotFoundException('Session not found');
     return data;
   }
 
@@ -60,39 +76,21 @@ export class AgentController {
    *
    * 接收 JSON body，返回 SSE 流。
    * 每个事件是一个 JSON 行，格式：`data: {"type":"text-delta","content":"你好"}\n\n`
-   *
-   * Body:
-   * {
-   *   "message": "帮我写一段代码",
-   *   "systemPrompt": "你是一个编码助手...",
-   *   "modelId": "gpt-4o",
-   *   "apiKey": "sk-...",
-   *   "temperature": 0.7
-   * }
    */
   @Post('chat')
+  @ApiOperation({ summary: 'Agent 流式对话（SSE）', description: '发送消息给 Agent，通过 SSE 流式返回响应。支持多轮对话、工具调用、Trace 追踪。' })
+  @ApiBody({ type: ChatDto })
   @Header('Content-Type', 'text/event-stream')
   @Header('Cache-Control', 'no-cache')
   @Header('Connection', 'keep-alive')
   @Header('X-Accel-Buffering', 'no') // 禁用 nginx 缓冲
   async chat(
-    @Body() body: {
-      message: string;
-      systemPrompt?: string;
-      modelId?: string;
-      apiKey?: string;
-      baseURL?: string;
-      provider?: 'openai' | 'anthropic';
-      temperature?: number;
-      maxTokens?: number;
-      sessionId?: string;
-      enabledTools?: string[];
-    },
+    @Body() body: ChatDto,
     @Res() res: { setHeader: (k: string, v: string) => void; flushHeaders: () => void; write: (d: string) => void; end: () => void; status: (c: number) => { json: (d: unknown) => void } },
   ) {
-    // 验证必填字段
+    // ValidationPipe 已校验 message 非空，此处为安全网
     if (!body.message) {
-      res.status(400).json({ error: 'message is required' });
+      res.status(400).json({ code: 400, data: null, message: 'message is required', timestamp: Date.now() });
       return;
     }
 

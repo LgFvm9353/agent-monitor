@@ -1,5 +1,5 @@
 import { Injectable, Inject } from '@nestjs/common';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, sql } from 'drizzle-orm';
 import type { DrizzleDB } from '../../db/schema';
 import { DB_TOKEN } from '../../db/drizzle.module';
 import { traces, traceSpans } from '../../db/schema';
@@ -49,26 +49,48 @@ export class TraceService {
   }
 
   async getStats() {
-    const allTraces = await this.db.select().from(traces);
-    const total = allTraces.length;
-    const successful = allTraces.filter((t) => t.success).length;
-    const avgDuration = total > 0
-      ? allTraces.reduce((sum, t) => sum + t.durationMs, 0) / total
-      : 0;
-    const totalCost = allTraces.reduce(
-      (sum, t) => sum + (t.estimatedCost || 0), 0,
-    );
+    // 聚合查询 — 使用 SQL 聚合函数替代全量加载到内存
+    const aggResult = await this.db
+      .select({
+        total: sql<number>`CAST(COUNT(*) AS DOUBLE)`,
+        successful: sql<number>`CAST(SUM(CASE WHEN ${traces.success} = true THEN 1 ELSE 0 END) AS DOUBLE)`,
+        failed: sql<number>`CAST(SUM(CASE WHEN ${traces.success} = false THEN 1 ELSE 0 END) AS DOUBLE)`,
+        avgDurationMs: sql<number>`CAST(AVG(${traces.durationMs}) AS DOUBLE)`,
+        totalInputTokens: sql<number>`CAST(SUM(${traces.inputTokens}) AS DOUBLE)`,
+        totalOutputTokens: sql<number>`CAST(SUM(${traces.outputTokens}) AS DOUBLE)`,
+        totalEstimatedCost: sql<number>`CAST(SUM(COALESCE(${traces.estimatedCost}, 0)) AS DOUBLE)`,
+      })
+      .from(traces);
+
+    const r = aggResult[0];
+    const total = Number(r.total) || 0;
+    const successful = Number(r.successful) || 0;
+    const failed = Number(r.failed) || 0;
+
+    // modelDistribution 需要 GROUP BY 查询
+    const modelRows = await this.db
+      .select({
+        model: traces.model,
+        count: sql<number>`CAST(COUNT(*) AS DOUBLE)`,
+      })
+      .from(traces)
+      .groupBy(traces.model);
+
     const modelDistribution: Record<string, number> = {};
-    allTraces.forEach((t) => {
-      modelDistribution[t.model] = (modelDistribution[t.model] || 0) + 1;
-    });
+    for (const row of modelRows) {
+      modelDistribution[row.model] = Number(row.count);
+    }
+
     return {
-      total, successful, failed: total - successful,
+      total,
+      successful,
+      failed,
       successRate: total > 0 ? successful / total : 0,
-      avgDurationMs: Math.round(avgDuration),
-      totalInputTokens: allTraces.reduce((s, t) => s + t.inputTokens, 0),
-      totalOutputTokens: allTraces.reduce((s, t) => s + t.outputTokens, 0),
-      totalEstimatedCost: totalCost, modelDistribution,
+      avgDurationMs: Math.round(Number(r.avgDurationMs) || 0),
+      totalInputTokens: Number(r.totalInputTokens) || 0,
+      totalOutputTokens: Number(r.totalOutputTokens) || 0,
+      totalEstimatedCost: Number(r.totalEstimatedCost) || 0,
+      modelDistribution,
     };
   }
 }

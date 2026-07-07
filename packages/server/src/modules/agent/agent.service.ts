@@ -1,4 +1,5 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { eq } from 'drizzle-orm';
 import type { DrizzleDB } from '../../db/schema';
 import { DB_TOKEN } from '../../db/drizzle.module';
@@ -17,6 +18,8 @@ import { createQueryMonitorEventsTool, createGetMonitorStatsTool } from './tools
 
 @Injectable()
 export class AgentService {
+  private readonly logger = new Logger(AgentService.name);
+
   /** 会话数据 */
   private sessionMemories = new Map<string, {
     memory: MemoryManager;
@@ -29,6 +32,7 @@ export class AgentService {
     @Inject(DB_TOKEN) private db: DrizzleDB,
     private readonly monitorService: MonitorService,
     private readonly traceService: TraceService,
+    private readonly configService: ConfigService,
   ) {}
 
   /** 获取或创建会话记忆 */
@@ -171,7 +175,7 @@ export class AgentService {
       }>;
     },
   ): AsyncGenerator<StreamEvent> {
-    const apiKey = config.apiKey || process.env.OPENAI_API_KEY || '';
+    const apiKey = config.apiKey || this.configService.get<string>('ai.apiKey', '');
     const modelId = config.modelId || 'deepseek-v4-pro';
     const provider = config.provider || 'openai';
 
@@ -184,7 +188,7 @@ export class AgentService {
       provider,
       apiKey,
       modelId,
-      baseURL: config.baseURL || process.env.OPENAI_BASE_URL,
+      baseURL: config.baseURL || this.configService.get<string>('ai.baseUrl', ''),
     });
 
     // 注册工具（根据 enabledTools 过滤）
@@ -243,7 +247,7 @@ export class AgentService {
         createdAt: traceStartTime,
       });
     } catch (err) {
-      console.error('Failed to save initial trace:', err);
+      this.logger.error('Failed to save initial trace:', err);
     }
 
     // Span 时序追踪
@@ -369,7 +373,7 @@ export class AgentService {
                   output: timing.output,
                   status: timing.status,
                   statusMessage: timing.statusMessage,
-                }).catch(err => console.error(`Failed to save span ${spanId}:`, err))
+                }).catch(err => this.logger.error(`Failed to save span ${spanId}:`, err))
               );
             }
             await Promise.all(spanPromises);
@@ -390,7 +394,7 @@ export class AgentService {
                 durationMs,
               });
             } catch (err) {
-              console.error('Failed to update trace:', err);
+              this.logger.error('Failed to update trace:', err);
             }
 
             // ===== 保存消息到会话记忆 =====
@@ -452,7 +456,7 @@ export class AgentService {
                     endTime: timing.endTime,
                     status: timing.status,
                     statusMessage: timing.statusMessage,
-                  }).catch(err => console.error(`Failed to save span ${spanId}:`, err))
+                  }).catch(err => this.logger.error(`Failed to save span ${spanId}:`, err))
                 );
               }
             }
@@ -469,7 +473,7 @@ export class AgentService {
                 durationMs: Date.now() - traceStartTime,
               });
             } catch (err) {
-              console.error('Failed to update trace on error:', err);
+              this.logger.error('Failed to update trace on error:', err);
             }
 
             // ===== 保存已有消息到会话记忆 =====
@@ -529,7 +533,7 @@ export class AgentService {
           durationMs: Date.now() - traceStartTime,
         });
       } catch (err) {
-        console.error('Failed to update trace on exception:', err);
+        this.logger.error('Failed to update trace on exception:', err);
       }
       yield { type: 'error', message: errorMsg };
     }
@@ -545,7 +549,7 @@ export class AgentService {
     if (compressible.length === 0) return;
 
     const config = memory.getCompressionConfig();
-    console.log(
+    this.logger.log(
       `[AgentService] Compressing: ${config.currentTokens}/${config.maxTokens} tokens (${config.messageCount} msgs → keeping ${config.keepRecent} turns)`,
     );
 
@@ -553,7 +557,7 @@ export class AgentService {
       const summary = await this.generateSummary(adapter, compressible);
       memory.applyCompression(summary);
     } catch (err) {
-      console.error('[AgentService] Summary generation failed, using fallback:', err);
+      this.logger.error('[AgentService] Summary generation failed, using fallback:', err);
       // 降级：用简单的文本拼接做摘要
       const fallback = compressible
         .filter((m) => m.role !== 'system')

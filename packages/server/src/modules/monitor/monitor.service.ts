@@ -1,11 +1,13 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import type { DrizzleDB } from '../../db/schema';
 import { DB_TOKEN } from '../../db/drizzle.module';
 import { monitorEvents } from '../../db/schema';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, sql } from 'drizzle-orm';
 
 @Injectable()
 export class MonitorService {
+  private readonly logger = new Logger(MonitorService.name);
+
   constructor(@Inject(DB_TOKEN) private db: DrizzleDB) {}
 
   /** 接收前端 SDK 上报的事件 */
@@ -35,7 +37,7 @@ export class MonitorService {
         const msg = (err as Error).message || '';
         // ER_DUP_ENTRY = 主键/唯一键冲突，属于正常去重
         if (!msg.includes('ER_DUP_ENTRY') && !msg.includes('Duplicate entry')) {
-          console.error('[MonitorService] insert failed:', event.eventId, msg);
+          this.logger.error(`[MonitorService] insert failed: ${event.eventId}`, msg);
         }
       }
     }
@@ -58,19 +60,27 @@ export class MonitorService {
     return base;
   }
 
-  /** 按类型统计（支持按 appId 过滤） */
+  /** 按类型统计（支持按 appId 过滤）— SQL GROUP BY 聚合 */
   async getEventStats(appId?: string) {
-    let all;
-    if (appId) {
-      all = await this.db.select().from(monitorEvents)
-        .where(eq(monitorEvents.appId, appId));
-    } else {
-      all = await this.db.select().from(monitorEvents);
+    const conditions = appId ? [eq(monitorEvents.appId, appId)] : [];
+
+    const rows = await this.db
+      .select({
+        type: monitorEvents.type,
+        count: sql<number>`CAST(COUNT(*) AS DOUBLE)`,
+      })
+      .from(monitorEvents)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .groupBy(monitorEvents.type);
+
+    const byType: Record<string, number> = {};
+    let total = 0;
+    for (const row of rows) {
+      const c = Number(row.count);
+      byType[row.type] = c;
+      total += c;
     }
-    const stats: Record<string, number> = {};
-    for (const event of all) {
-      stats[event.type] = (stats[event.type] || 0) + 1;
-    }
-    return { total: all.length, byType: stats };
+
+    return { total, byType };
   }
 }

@@ -1,11 +1,16 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, Param, Query, NotFoundException } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { TraceService } from './trace.service';
 
+@ApiTags('traces')
 @Controller('traces')
 export class TraceController {
   constructor(private readonly traceService: TraceService) {}
 
   @Get()
+  @ApiOperation({ summary: '列出 Trace 记录' })
+  @ApiQuery({ name: 'limit', required: false, description: '返回条数（默认 50）' })
+  @ApiQuery({ name: 'offset', required: false, description: '偏移量（默认 0）' })
   async listTraces(
     @Query('limit') limit = 50,
     @Query('offset') offset = 0,
@@ -14,15 +19,18 @@ export class TraceController {
   }
 
   @Get('stats')
+  @ApiOperation({ summary: 'Trace 统计概览' })
   async getStats() {
     return this.traceService.getStats();
   }
 
   @Get(':id')
+  @ApiOperation({ summary: '获取单个 Trace 及其所有 Span' })
+  @ApiParam({ name: 'id', description: 'Trace ID' })
   async getTrace(@Param('id') id: string) {
     const result = await this.traceService.getTraceWithSpans(id);
     if (!result) {
-      return { error: 'Trace not found', id };
+      throw new NotFoundException('Trace not found');
     }
     return result;
   }
