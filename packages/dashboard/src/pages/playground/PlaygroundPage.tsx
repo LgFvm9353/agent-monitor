@@ -197,6 +197,8 @@ export function PlaygroundPage() {
       const decoder = new TextDecoder();
       let buffer = '';
 
+      let streamEnded = false;
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -258,6 +260,8 @@ export function PlaygroundPage() {
                 break;
 
               case 'done':
+                // 服务端已确认对话结束，主动终止流读取
+                streamEnded = true;
                 break;
 
               case 'error':
@@ -265,11 +269,17 @@ export function PlaygroundPage() {
                   role: 'assistant',
                   content: `❌ Error: ${event.message}`,
                 }]);
+                streamEnded = true;
                 break;
             }
           } catch {
             // 忽略解析失败的行
           }
+        }
+
+        if (streamEnded) {
+          await reader.cancel();
+          break;
         }
       }
     } catch (error) {
@@ -281,6 +291,12 @@ export function PlaygroundPage() {
     } finally {
       setLoading(false);
       abortRef.current = null;
+      // 清理所有仍在 running 状态的 tool 消息，防止孤儿转圈
+      setMessages((prev) => prev.map((msg) =>
+        msg.role === 'tool' && msg.toolStatus === 'running'
+          ? { ...msg, toolStatus: 'done' as const, content: msg.content || '(no result)' }
+          : msg,
+      ));
     }
   };
 
