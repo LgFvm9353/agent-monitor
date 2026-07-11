@@ -2,6 +2,8 @@
  * API 请求封装
  */
 
+import type { RunDetail, TraceSummary } from '../store/traceStore';
+
 const BASE_URL = '/api';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
@@ -34,8 +36,9 @@ export interface ChatRequest {
 
 export const api = {
   // Trace
-  getTraces: (limit = 50) => request(`/traces?limit=${limit}`),
+  getTraces: (limit = 50) => request<TraceSummary[]>(`/traces?limit=${limit}`),
   getTrace: (id: string) => request(`/traces/${id}`),
+  getRunDetail: (id: string) => request<RunDetail>(`/traces/${id}/run-detail`),
   getTraceStats: () => request('/traces/stats'),
 
   // Eval

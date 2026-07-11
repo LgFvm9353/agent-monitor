@@ -4,6 +4,7 @@
  * 表结构：
  * - traces: Agent 执行 Trace 记录
  * - trace_spans: Trace 中的 Span 数据
+ * - runtime_events: Agent 运行时事件明细
  * - eval_datasets: 评估数据集
  * - eval_runs: 评估运行记录
  * - monitor_events: 前端监控上报事件
@@ -60,6 +61,34 @@ export const traceSpans = mysqlTable('trace_spans', {
   metadata: text('metadata'),
 }, (table) => ({
   traceIdIdx: index('idx_trace_spans_trace_id').on(table.traceId),
+}));
+
+/** Agent 运行时事件明细 */
+export const runtimeEvents = mysqlTable('runtime_events', {
+  id: varchar('id', { length: 64 }).primaryKey(),
+  traceId: varchar('trace_id', { length: 64 }).notNull(),
+  runId: varchar('run_id', { length: 64 }).notNull(),
+  parentId: varchar('parent_id', { length: 64 }),
+  stepId: varchar('step_id', { length: 64 }),
+  kind: varchar('kind', { length: 32 }).notNull(),
+  eventType: varchar('event_type', { length: 64 }).notNull(),
+  name: varchar('name', { length: 255 }).notNull(),
+  status: varchar('status', { length: 16 }).notNull(),
+  startTime: bigint('start_time', { mode: 'number' }).notNull(),
+  endTime: bigint('end_time', { mode: 'number' }),
+  durationMs: int('duration_ms'),
+  input: mediumtext('input'),
+  outputSummary: mediumtext('output_summary'),
+  error: text('error'),
+  metadata: mediumtext('metadata'),
+  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
+}, (table) => ({
+  traceIdIdx: index('idx_runtime_events_trace_id').on(table.traceId),
+  runIdIdx: index('idx_runtime_events_run_id').on(table.runId),
+  kindIdx: index('idx_runtime_events_kind').on(table.kind),
+  eventTypeIdx: index('idx_runtime_events_event_type').on(table.eventType),
+  statusIdx: index('idx_runtime_events_status').on(table.status),
+  startTimeIdx: index('idx_runtime_events_start_time').on(table.startTime),
 }));
 
 // ===== Eval 相关 =====
@@ -140,6 +169,7 @@ export const agentConfigs = mysqlTable('agent_configs', {
 export const schema = {
   traces,
   traceSpans,
+  runtimeEvents,
   evalDatasets,
   evalRuns,
   monitorEvents,

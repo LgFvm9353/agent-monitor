@@ -2,7 +2,7 @@ import { Injectable, Inject } from '@nestjs/common';
 import { eq, desc, sql } from 'drizzle-orm';
 import type { DrizzleDB } from '../../db/schema';
 import { DB_TOKEN } from '../../db/drizzle.module';
-import { traces, traceSpans } from '../../db/schema';
+import { traces, traceSpans, runtimeEvents } from '../../db/schema';
 
 @Injectable()
 export class TraceService {
@@ -33,6 +33,32 @@ export class TraceService {
     return this.db.insert(traceSpans).values(data);
   }
 
+  async saveRuntimeEvents(events: Array<{
+    id: string;
+    traceId: string;
+    runId: string;
+    parentId?: string;
+    stepId?: string;
+    kind: string;
+    eventType: string;
+    name: string;
+    status: string;
+    startTime: number;
+    endTime?: number;
+    durationMs?: number;
+    input?: string;
+    outputSummary?: string;
+    error?: string;
+    metadata?: string;
+    createdAt: number;
+  }>) {
+    if (events.length === 0) {
+      return [];
+    }
+
+    return this.db.insert(runtimeEvents).values(events);
+  }
+
   async listTraces(limit = 50, offset = 0) {
     return this.db.select().from(traces)
       .orderBy(desc(traces.createdAt)).limit(limit).offset(offset);
@@ -46,6 +72,55 @@ export class TraceService {
     const spans = await this.db.select().from(traceSpans)
       .where(eq(traceSpans.traceId, traceId));
     return { trace, spans };
+  }
+
+  async getRuntimeEvents(traceId: string) {
+    return this.db.select().from(runtimeEvents)
+      .where(eq(runtimeEvents.traceId, traceId))
+      .orderBy(runtimeEvents.startTime);
+  }
+
+  async getRunDetail(traceId: string) {
+    const rows = await this.db.select().from(traces)
+      .where(eq(traces.id, traceId)).limit(1);
+    const trace = rows[0] || null;
+    if (!trace) return null;
+
+    const events = await this.getRuntimeEvents(traceId);
+    return { trace, events };
+  }
+
+  async getRuntimeEventStats() {
+    const aggResult = await this.db
+      .select({
+        total: sql<number>`CAST(COUNT(*) AS DOUBLE)`,
+        successful: sql<number>`CAST(SUM(CASE WHEN ${runtimeEvents.status} = 'completed' THEN 1 ELSE 0 END) AS DOUBLE)`,
+        failed: sql<number>`CAST(SUM(CASE WHEN ${runtimeEvents.status} = 'failed' THEN 1 ELSE 0 END) AS DOUBLE)`,
+        avgDurationMs: sql<number>`CAST(AVG(${runtimeEvents.durationMs}) AS DOUBLE)`,
+      })
+      .from(runtimeEvents);
+
+    const kindRows = await this.db
+      .select({
+        kind: runtimeEvents.kind,
+        count: sql<number>`CAST(COUNT(*) AS DOUBLE)`,
+      })
+      .from(runtimeEvents)
+      .groupBy(runtimeEvents.kind);
+
+    const kindDistribution: Record<string, number> = {};
+    for (const row of kindRows) {
+      kindDistribution[row.kind] = Number(row.count) || 0;
+    }
+
+    const result = aggResult[0];
+    return {
+      total: Number(result.total) || 0,
+      successful: Number(result.successful) || 0,
+      failed: Number(result.failed) || 0,
+      avgDurationMs: Math.round(Number(result.avgDurationMs) || 0),
+      kindDistribution,
+    };
   }
 
   async getStats() {

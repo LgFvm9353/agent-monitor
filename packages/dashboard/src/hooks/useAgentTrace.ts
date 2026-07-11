@@ -2,20 +2,23 @@
  * useAgentTrace — WebSocket 实时 Trace Hook
  *
  * 连接后端 Trace WebSocket，接收实时 Agent 执行状态。
- *
- * 使用方式：
- *   const { isConnected, subscribe } = useAgentTrace();
- *   subscribe(traceId);
+ * 当前单次 Run 详情页的主数据来源仍然是 HTTP run-detail 接口，
+ * WebSocket 仅用于连接态展示与后续实时增强。
  */
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { useTraceStore } from '../store/traceStore';
+import { useTraceStore, type RuntimeEvent } from '../store/traceStore';
+
+interface TraceEventPayload {
+  traceId: string;
+  event: RuntimeEvent;
+}
 
 export function useAgentTrace() {
   const socketRef = useRef<Socket | null>(null);
   const setConnected = useTraceStore((s) => s.setConnected);
-  const appendRealtimeSpan = useTraceStore((s) => s.appendRealtimeSpan);
+  const appendRealtimeEvent = useTraceStore((s) => s.appendRealtimeEvent);
 
   useEffect(() => {
     const socket = io('http://localhost:3001/trace', {
@@ -26,7 +29,6 @@ export function useAgentTrace() {
     socket.on('connect', () => setConnected(true));
     socket.on('disconnect', () => setConnected(false));
 
-    // 监听实时 Trace 事件
     socket.on('trace:start', (data) => {
       console.log('[Trace] Started:', data.traceId);
     });
@@ -35,8 +37,8 @@ export function useAgentTrace() {
       console.log('[Trace] Step:', data);
     });
 
-    socket.on('trace:span', (data) => {
-      appendRealtimeSpan(data.traceId, data.span);
+    socket.on('trace:event', (data: TraceEventPayload) => {
+      appendRealtimeEvent(data.traceId, data.event);
     });
 
     socket.on('trace:done', (data) => {
@@ -52,7 +54,7 @@ export function useAgentTrace() {
     return () => {
       socket.disconnect();
     };
-  }, [setConnected, appendRealtimeSpan]);
+  }, [setConnected, appendRealtimeEvent]);
 
   const subscribe = useCallback((traceId: string) => {
     socketRef.current?.emit('subscribe', { traceId });
