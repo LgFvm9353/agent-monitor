@@ -17,6 +17,7 @@
  */
 
 import type { AgentTrace, AgentSpan, TraceMetadata, SpanType, SpanStatus } from '../types';
+import type { RuntimeEvent, RuntimeEventKind, RuntimeEventStatus } from '../agent/types';
 
 interface SpanRecord {
   spanId: string;
@@ -199,6 +200,95 @@ export function getGlobalTracer(): Tracer {
     _globalTracer = new Tracer();
   }
   return _globalTracer;
+}
+
+export interface RuntimeEventDraft {
+  traceId: string;
+  runId: string;
+  parentId?: string;
+  stepId?: string;
+  kind: RuntimeEventKind;
+  eventType: string;
+  name: string;
+  input?: unknown;
+  metadata?: Record<string, unknown>;
+}
+
+export class RuntimeEventRecorder {
+  private events: RuntimeEvent[] = [];
+  private activeEvents = new Map<string, RuntimeEvent>();
+
+  start(draft: RuntimeEventDraft): RuntimeEvent {
+    const event: RuntimeEvent = {
+      eventId: this.generateId(draft.kind),
+      traceId: draft.traceId,
+      runId: draft.runId,
+      parentId: draft.parentId,
+      stepId: draft.stepId,
+      kind: draft.kind,
+      eventType: draft.eventType,
+      name: draft.name,
+      status: 'started',
+      startTime: Date.now(),
+      input: draft.input,
+      metadata: draft.metadata,
+    };
+
+    this.events.push(event);
+    this.activeEvents.set(event.eventId, event);
+    return event;
+  }
+
+  complete(eventId: string, outputSummary?: unknown, metadata?: Record<string, unknown>): RuntimeEvent | null {
+    return this.finish(eventId, 'completed', { outputSummary, metadata });
+  }
+
+  fail(eventId: string, error: string, metadata?: Record<string, unknown>): RuntimeEvent | null {
+    return this.finish(eventId, 'failed', { error, metadata });
+  }
+
+  getAll(): RuntimeEvent[] {
+    return this.events.map((event) => ({
+      ...event,
+      metadata: event.metadata ? { ...event.metadata } : undefined,
+    }));
+  }
+
+  clear(): void {
+    this.events = [];
+    this.activeEvents.clear();
+  }
+
+  private finish(
+    eventId: string,
+    status: RuntimeEventStatus,
+    patch: { outputSummary?: unknown; error?: string; metadata?: Record<string, unknown> },
+  ): RuntimeEvent | null {
+    const event = this.activeEvents.get(eventId);
+    if (!event) return null;
+
+    event.status = status;
+    event.endTime = Date.now();
+    event.durationMs = event.endTime - event.startTime;
+    if (patch.outputSummary !== undefined) {
+      event.outputSummary = patch.outputSummary;
+    }
+    if (patch.error !== undefined) {
+      event.error = patch.error;
+    }
+    if (patch.metadata) {
+      event.metadata = {
+        ...(event.metadata || {}),
+        ...patch.metadata,
+      };
+    }
+    this.activeEvents.delete(eventId);
+    return event;
+  }
+
+  private generateId(kind: RuntimeEventKind): string {
+    return `${kind}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
 }
 
 // ===== Step Recorder =====

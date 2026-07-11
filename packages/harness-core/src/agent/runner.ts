@@ -37,13 +37,26 @@ import type {
   ToolCall,
   RunMetrics,
   StreamEvent,
+  RuntimeEvent,
 } from './types';
 import { ToolRegistry } from '../tool/registry';
 import { MiddlewarePipeline } from '../middleware/pipeline';
 import { MemoryManager } from '../memory/manager';
-import { createTracer, StepRecorder, BreakpointManager } from '../trace/tracer';
+import { createTracer, StepRecorder, BreakpointManager, RuntimeEventRecorder } from '../trace/tracer';
 import { StreamAccumulator } from './adapter';
 import type { Guardrail } from '../guardrail/types';
+
+function summarizeRuntimeValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value.substring(0, 500);
+  }
+
+  try {
+    return JSON.stringify(value).substring(0, 500);
+  } catch {
+    return String(value).substring(0, 500);
+  }
+}
 
 export class AgentRunner {
   private adapter: ModelAdapter;
@@ -54,6 +67,7 @@ export class AgentRunner {
   private tracer = createTracer();
   private guardrails: Guardrail[] = [];
   private stepRecorder = new StepRecorder();
+  private runtimeEventRecorder = new RuntimeEventRecorder();
   private breakpointManager = new BreakpointManager();
 
   constructor(adapter: ModelAdapter) {
@@ -153,11 +167,24 @@ export class AgentRunner {
   ): Promise<AgentResult> {
     const startTime = Date.now();
     const traceId = this.tracer.startTrace('agent-run', { sessionId: crypto.randomUUID?.() ?? Date.now().toString(36) });
+    const runId = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
     const steps: AgentStep[] = [];
     const toolCalls: ToolCallRecord[] = [];
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+
+    this.stepRecorder.clear();
+    this.runtimeEventRecorder.clear();
+    const runEvent = this.runtimeEventRecorder.start({
+      traceId,
+      runId,
+      kind: 'run',
+      eventType: 'run_started',
+      name: 'Agent Run',
+      input: { userMessage },
+      metadata: { model: config.model },
+    });
 
     // 构建消息列表
     const messages: AgentMessage[] = [
@@ -187,6 +214,8 @@ export class AgentRunner {
       const finalHandler = async (): Promise<AgentResult> => {
         return this.executeLoop(context, {
           traceId,
+          runId,
+          runEventId: runEvent.eventId,
           steps,
           toolCalls,
           getInputTokens: () => totalInputTokens,
@@ -202,7 +231,13 @@ export class AgentRunner {
     } catch (error) {
       return this.buildErrorResult(
         error instanceof Error ? error.message : String(error),
-        traceId, startTime, steps, totalInputTokens, totalOutputTokens
+        traceId,
+        runId,
+        runEvent.eventId,
+        startTime,
+        steps,
+        totalInputTokens,
+        totalOutputTokens
       );
     }
   }
@@ -402,6 +437,8 @@ export class AgentRunner {
     ctx: RunContext,
     state: {
       traceId: string;
+      runId: string;
+      runEventId: string;
       steps: AgentStep[];
       toolCalls: ToolCallRecord[];
       getInputTokens: () => number;
@@ -411,7 +448,7 @@ export class AgentRunner {
       startTime: number;
     },
   ): Promise<AgentResult> {
-    const { traceId, steps, toolCalls, addInputTokens, addOutputTokens, startTime } = state;
+    const { traceId, runId, runEventId, steps, toolCalls, addInputTokens, addOutputTokens, startTime } = state;
 
     for (let i = 0; i < ctx.maxSteps; i++) {
       ctx.currentStep = i;
@@ -433,7 +470,13 @@ export class AgentRunner {
           if (!result.allowed) {
             return this.buildErrorResult(
               `Guard "${guard.name}" blocked LLM call: ${result.reason}`,
-              traceId, startTime, steps, state.getInputTokens(), state.getOutputTokens()
+              traceId,
+              runId,
+              runEventId,
+              startTime,
+              steps,
+              state.getInputTokens(),
+              state.getOutputTokens()
             );
           }
         }
@@ -441,6 +484,18 @@ export class AgentRunner {
 
       const llmSpanId = this.tracer.startSpan(traceId, 'llm-call', 'llm', { step: i });
       const llmStart = Date.now();
+      const stepId = `step-${i + 1}`;
+      const stepEvent = this.runtimeEventRecorder.start({
+        traceId,
+        runId,
+        parentId: runEventId,
+        stepId,
+        kind: 'step',
+        eventType: 'step_started',
+        name: `LLM Call #${i + 1}`,
+        input: ctx.messages[ctx.messages.length - 1]?.content,
+        metadata: { stepIndex: i, phase: 'llm_call' },
+      });
 
       // Token 计数（如果适配器支持）
       if (this.adapter.countTokens) {
@@ -472,15 +527,29 @@ export class AgentRunner {
       });
 
       this.tracer.endSpan(llmSpanId, { output: response.content?.substring(0, 500) });
+      this.runtimeEventRecorder.complete(stepEvent.eventId, response.content?.substring(0, 500), {
+        tokenUsage: {
+          input: response.usage?.inputTokens || 0,
+          output: response.usage?.outputTokens || 0,
+        },
+        finishReason: response.finishReason,
+      });
 
       // Guardrail afterLLM
       for (const guard of this.guardrails) {
         if (guard.afterLLM) {
           const result = await guard.afterLLM(ctx, response.content);
           if (!result.allowed) {
+            this.runtimeEventRecorder.fail(stepEvent.eventId, `Guard "${guard.name}" rejected LLM response: ${result.reason}`);
             return this.buildErrorResult(
               `Guard "${guard.name}" rejected LLM response: ${result.reason}`,
-              traceId, startTime, steps, state.getInputTokens(), state.getOutputTokens()
+              traceId,
+              runId,
+              runEventId,
+              startTime,
+              steps,
+              state.getInputTokens(),
+              state.getOutputTokens()
             );
           }
         }
@@ -557,6 +626,17 @@ export class AgentRunner {
           if (toolBlocked) continue;
 
           const toolSpanId = this.tracer.startSpan(traceId, `tool:${tc.name}`, 'tool', { tool: tc.name });
+          const toolEvent = this.runtimeEventRecorder.start({
+            traceId,
+            runId,
+            parentId: stepEvent.eventId,
+            stepId,
+            kind: 'tool_call',
+            eventType: 'tool_call_started',
+            name: tc.name,
+            input: tc.arguments,
+            metadata: { toolCallId: tc.id },
+          });
 
           const toolStart = Date.now();
           try {
@@ -597,6 +677,11 @@ export class AgentRunner {
                   };
                   toolCalls.push(toolRecord);
                   this.tracer.endSpan(toolSpanId, { error: guardResult.reason }, 'error');
+                  this.runtimeEventRecorder.fail(
+                    toolEvent.eventId,
+                    `Rejected by guard "${guard.name}": ${guardResult.reason}`,
+                    { toolCallId: tc.id },
+                  );
                   ctx.messages.push({
                     role: 'tool',
                     content: guardResult.reason || 'Tool result rejected',
@@ -608,6 +693,9 @@ export class AgentRunner {
               }
             }
 
+            this.runtimeEventRecorder.complete(toolEvent.eventId, summarizeRuntimeValue(result), {
+              toolCallId: tc.id,
+            });
             this.events.emit('tool-call', toolRecord);
 
             // 记录工具调用步骤
@@ -641,6 +729,7 @@ export class AgentRunner {
             toolCalls.push(toolRecord);
 
             this.tracer.endSpan(toolSpanId, { error: errorMsg }, 'error');
+            this.runtimeEventRecorder.fail(toolEvent.eventId, errorMsg, { toolCallId: tc.id });
 
             ctx.messages.push({
               role: 'tool',
@@ -666,6 +755,10 @@ export class AgentRunner {
         },
         success: true,
       });
+      this.runtimeEventRecorder.complete(runEventId, response.content?.substring(0, 500), {
+        model: ctx.config.model,
+        totalTokens: state.getInputTokens() + state.getOutputTokens(),
+      });
 
       this.events.emit('done', { output: response.content });
 
@@ -679,27 +772,40 @@ export class AgentRunner {
         },
         duration: Date.now() - startTime,
         steps,
+        runtimeEvents: this.runtimeEventRecorder.getAll(),
         success: true,
         traceId,
+        runId,
       };
     }
 
     // Max steps exceeded
     return this.buildErrorResult(
       `Agent exceeded maximum of ${ctx.maxSteps} steps`,
-      traceId, startTime, steps, state.getInputTokens(), state.getOutputTokens()
+      traceId,
+      runId,
+      runEventId,
+      startTime,
+      steps,
+      state.getInputTokens(),
+      state.getOutputTokens()
     );
   }
 
   private buildErrorResult(
     error: string,
     traceId: string,
+    runId: string,
+    runEventId: string,
     startTime: number,
     steps: AgentStep[],
     inputTokens: number,
     outputTokens: number,
   ): AgentResult {
     this.tracer.endTrace(traceId, { error, success: false });
+    this.runtimeEventRecorder.fail(runEventId, error, {
+      totalTokens: inputTokens + outputTokens,
+    });
     this.events.emit('error', { error });
     return {
       output: '',
@@ -707,9 +813,11 @@ export class AgentRunner {
       tokens: { input: inputTokens, output: outputTokens, total: inputTokens + outputTokens },
       duration: Date.now() - startTime,
       steps,
+      runtimeEvents: this.runtimeEventRecorder.getAll(),
       success: false,
       error,
       traceId,
+      runId,
     };
   }
 }

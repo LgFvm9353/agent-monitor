@@ -9,6 +9,35 @@
 
 import type { AgentConfig, ToolDefinition } from '../types';
 
+export type RuntimeEventKind =
+  | 'run'
+  | 'step'
+  | 'tool_call'
+  | 'skill_call'
+  | 'mcp_call'
+  | 'error';
+
+export type RuntimeEventStatus = 'started' | 'completed' | 'failed';
+
+export interface RuntimeEvent {
+  eventId: string;
+  traceId: string;
+  runId: string;
+  parentId?: string;
+  stepId?: string;
+  kind: RuntimeEventKind;
+  eventType: string;
+  name: string;
+  status: RuntimeEventStatus;
+  startTime: number;
+  endTime?: number;
+  durationMs?: number;
+  input?: unknown;
+  outputSummary?: unknown;
+  error?: string;
+  metadata?: Record<string, unknown>;
+}
+
 // ===== Model Adapter =====
 
 /** 模型适配器接口 — 统一 OpenAI/Anthropic/DeepSeek 等不同提供商的调用方式 */
@@ -95,12 +124,16 @@ export interface AgentResult {
   duration: number;
   /** 执行步骤数（每轮 LLM 调用算一步） */
   steps: AgentStep[];
+  /** 统一运行时事件 */
+  runtimeEvents: RuntimeEvent[];
   /** 是否成功 */
   success: boolean;
   /** 错误信息 */
   error?: string;
   /** Trace ID */
   traceId: string;
+  /** Run ID */
+  runId: string;
 }
 
 /** 工具调用记录 */

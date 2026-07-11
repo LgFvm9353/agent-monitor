@@ -80,6 +80,9 @@ export type {
   ToolCallRecord,
   RunContext,
   StreamEvent,
+  RuntimeEvent,
+  RuntimeEventKind,
+  RuntimeEventStatus,
 } from './agent/types';
 
 // Tool
