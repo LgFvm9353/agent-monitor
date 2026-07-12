@@ -2,7 +2,6 @@ import { Outlet, NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
   Search,
-  BarChart3,
   Play,
   Activity,
 } from 'lucide-react';
@@ -10,7 +9,6 @@ import {
 const navItems = [
   { to: '/overview', label: 'Overview', icon: LayoutDashboard },
   { to: '/trace', label: 'Trace Explorer', icon: Search },
-  { to: '/eval', label: 'Eval', icon: BarChart3 },
   { to: '/playground', label: 'Playground', icon: Play },
   { to: '/monitor', label: 'Monitor', icon: Activity },
 ];

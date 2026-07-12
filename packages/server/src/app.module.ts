@@ -3,7 +3,6 @@ import { APP_INTERCEPTOR } from '@nestjs/core';
 import { AppConfigModule } from './config/config.module';
 import { DrizzleModule } from './db/drizzle.module';
 import { TraceModule } from './modules/trace/trace.module';
-import { EvalModule } from './modules/eval/eval.module';
 import { AgentModule } from './modules/agent/agent.module';
 import { MonitorModule } from './modules/monitor/monitor.module';
 import { ResponseInterceptor } from './common/interceptor/response.interceptor';
@@ -13,7 +12,6 @@ import { ResponseInterceptor } from './common/interceptor/response.interceptor';
     AppConfigModule,
     DrizzleModule,
     TraceModule,
-    EvalModule,
     AgentModule,
     MonitorModule,
   ],

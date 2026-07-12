@@ -33,7 +33,6 @@ async function bootstrap() {
     .setVersion('0.1.0')
     .addTag('agent', 'Agent 对话 & 配置')
     .addTag('traces', 'Trace 查询 & 统计')
-    .addTag('eval', 'Eval 数据集 & 运行记录')
     .addTag('monitor', '前端监控事件')
     .build();
   const document = SwaggerModule.createDocument(app, swaggerConfig);

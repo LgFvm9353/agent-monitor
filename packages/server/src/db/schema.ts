@@ -91,37 +91,6 @@ export const runtimeEvents = mysqlTable('runtime_events', {
   startTimeIdx: index('idx_runtime_events_start_time').on(table.startTime),
 }));
 
-// ===== Eval 相关 =====
-
-/** Eval 数据集 */
-export const evalDatasets = mysqlTable('eval_datasets', {
-  id: varchar('id', { length: 64 }).primaryKey(),
-  name: varchar('name', { length: 255 }).notNull(),
-  description: text('description'),
-  /** JSON: EvalItem[] */
-  items: mediumtext('items').notNull().default('[]'),
-  createdAt: bigint('created_at', { mode: 'number' }).notNull(),
-  updatedAt: bigint('updated_at', { mode: 'number' }).notNull(),
-});
-
-/** Eval 运行记录 */
-export const evalRuns = mysqlTable('eval_runs', {
-  id: varchar('id', { length: 64 }).primaryKey(),
-  datasetId: varchar('dataset_id', { length: 64 }).notNull(),
-  /** JSON: AgentConfig */
-  agentConfig: text('agent_config').notNull(),
-  /** JSON: EvalScore[] */
-  scores: mediumtext('scores').notNull().default('[]'),
-  startTime: bigint('start_time', { mode: 'number' }).notNull(),
-  endTime: bigint('end_time', { mode: 'number' }).notNull(),
-  /** 通过率 0-1 */
-  passRate: double('pass_rate').notNull().default(0),
-  /** JSON: scorer averages */
-  scorerAverages: text('scorer_averages').default('{}'),
-}, (table) => ({
-  datasetIdIdx: index('idx_eval_runs_dataset_id').on(table.datasetId),
-}));
-
 // ===== 前端监控事件 =====
 
 /** 前端监控上报事件 */
@@ -170,8 +139,6 @@ export const schema = {
   traces,
   traceSpans,
   runtimeEvents,
-  evalDatasets,
-  evalRuns,
   monitorEvents,
   agentConfigs,
 };

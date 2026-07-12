@@ -41,22 +41,6 @@ export const api = {
   getRunDetail: (id: string) => request<RunDetail>(`/traces/${id}/run-detail`),
   getTraceStats: () => request('/traces/stats'),
 
-  // Eval
-  getDatasets: () => request('/eval/datasets'),
-  getDataset: (id: string) => request(`/eval/datasets/${id}`),
-  createDataset: (name: string, description?: string) =>
-    request('/eval/datasets', {
-      method: 'POST',
-      body: JSON.stringify({ name, description }),
-    }),
-  addDatasetItem: (datasetId: string, item: { input: string; expectedOutput?: string; labels?: string[] }) =>
-    request(`/eval/datasets/${datasetId}/items`, {
-      method: 'POST',
-      body: JSON.stringify(item),
-    }),
-  getEvalRuns: (datasetId?: string) =>
-    request(`/eval/runs${datasetId ? `?datasetId=${datasetId}` : ''}`),
-
   // Agent Sessions
   getSessions: () => request('/agent/sessions'),
   getSession: (id: string) => request(`/agent/sessions/${id}`),

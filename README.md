@@ -63,13 +63,12 @@ agent-harness-monitor/
 
 - ✅ **Overview Dashboard** — 核心指标卡片 + 趋势图
 - ⭐ **Trace Explorer** — Agent 执行火焰图/时间线（类似 Chrome DevTools Performance）
-- ✅ **Eval Dashboard** — 评估数据集管理 + 评分对比
 - ✅ **Agent Playground** — System Prompt 编辑 + 实时对话测试
 - ✅ **Frontend Monitor** — Dashboard 自身监控（食狗粮）
 
 ### Part B-3: NestJS 后端
 
-- ✅ REST API（Trace / Eval / Agent / Monitor）
+- ✅ REST API（Trace / Agent / Monitor）
 - ✅ WebSocket 实时推送（Trace 流式更新）
 - ✅ MySQL 8.0 + Drizzle ORM
 
