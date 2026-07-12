@@ -21,7 +21,7 @@ export function useAgentTrace() {
   const appendRealtimeEvent = useTraceStore((s) => s.appendRealtimeEvent);
 
   useEffect(() => {
-    const socket = io('http://localhost:3001/trace', {
+    const socket = io('http://localhost:3000/trace', {
       transports: ['websocket'],
       autoConnect: true,
     });

@@ -5,7 +5,7 @@
  * 接入 @nestjs/config，各模块通过 ConfigService 获取配置。
  */
 export default () => ({
-  port: parseInt(process.env.PORT || '3001', 10),
+  port: parseInt(process.env.PORT || '3000', 10),
 
   database: {
     host: process.env.DB_HOST || 'localhost',

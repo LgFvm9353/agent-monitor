@@ -31,6 +31,9 @@ let instanceId = 0;
 
 export class Monitor implements MonitorCore {
   config: MonitorConfig;
+  createTrace?: MonitorCore['createTrace'];
+  setCurrentTrace?: MonitorCore['setCurrentTrace'];
+  getCurrentTrace?: MonitorCore['getCurrentTrace'];
   private plugins: MonitorPlugin[] = [];
   private pipeline: Pipeline;
   private transport: Transport;
