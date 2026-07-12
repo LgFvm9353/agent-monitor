@@ -4,10 +4,10 @@
   "description": "Agent Harness 引擎 — Agent Runner、Tool Registry、Middleware、Memory、Eval、Trace",
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
-  "types": "./dist/index.d.ts",
+  "types": "./src/index.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
+      "types": "./src/index.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.js"
     }

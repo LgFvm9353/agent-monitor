@@ -9,9 +9,10 @@
 
 import { useCallback, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
-import { useTraceStore, type RuntimeEvent } from '../../store/traceStore';
+import { useTraceStore, type RuntimeEvent, type SpanData } from '../../store/traceStore';
 import { useAgentTrace } from '../../hooks/useAgentTrace';
 import { api } from '../../lib/api';
+import { FlameGraph } from '../../components/trace/FlameGraph';
 import { TokenBar } from '../../components/trace/TokenBar';
 
 function formatDateTime(timestamp?: number | null): string {
@@ -112,6 +113,24 @@ export function TraceExplorerPage() {
     () => selectedRuntimeEvents.find((event) => event.id === selectedEventId) ?? null,
     [selectedEventId, selectedRuntimeEvents],
   );
+
+  const timelineSpans = useMemo<SpanData[]>(() => {
+    return selectedRuntimeEvents.map((event) => ({
+      id: event.id,
+      traceId: event.traceId,
+      parentSpanId: event.parentId ?? undefined,
+      name: event.name,
+      type: event.kind === 'system'
+        ? 'middleware'
+        : event.kind === 'tool' || event.kind === 'llm' || event.kind === 'agent'
+          ? event.kind
+          : 'middleware',
+      startTime: event.startTime,
+      endTime: event.endTime ?? event.startTime + (event.durationMs ?? 0),
+      status: event.status,
+      children: [],
+    }));
+  }, [selectedRuntimeEvents]);
 
   const timelineBounds = useMemo(() => {
     if (selectedRuntimeEvents.length === 0) {
@@ -240,55 +259,23 @@ export function TraceExplorerPage() {
               <div className="col-span-7 space-y-4">
                 <div className="rounded-lg border border-border bg-card p-4">
                   <div className="mb-3 flex items-center justify-between">
-                    <h4 className="text-sm font-medium text-foreground">Timeline</h4>
+                    <div>
+                      <h4 className="text-sm font-medium text-foreground">Trace Timeline</h4>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        类似时序图表格的执行时间线，点击某一条可在右侧查看详情
+                      </div>
+                    </div>
                     <span className="text-xs text-muted-foreground">
                       {selectedRuntimeEvents.length} events
                     </span>
                   </div>
 
-                  {selectedRuntimeEvents.length > 0 && timelineBounds ? (
-                    <div className="space-y-3">
-                      {selectedRuntimeEvents.map((event) => {
-                        const barStyle = getEventBarStyle(event, timelineBounds.minStartTime, timelineBounds.maxEndTime);
-                        const isSelected = event.id === selectedEventId;
-
-                        return (
-                          <button
-                            key={event.id}
-                            onClick={() => selectEvent(event.id)}
-                            className={`w-full rounded-md border p-3 text-left transition-colors ${
-                              isSelected
-                                ? 'border-primary/30 bg-primary/5'
-                                : 'border-border hover:bg-accent'
-                            }`}
-                          >
-                            <div className="mb-2 flex items-center gap-2">
-                              <span className={`inline-block h-2 w-2 rounded-full ${getKindDotClassName(event.kind)}`} />
-                              <span className="truncate text-sm font-medium text-foreground">{event.name}</span>
-                              <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                                {event.kind}
-                              </span>
-                              <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                                {event.eventType}
-                              </span>
-                              <span className={`ml-auto text-xs ${getStatusClassName(event.status)}`}>
-                                {event.status}
-                              </span>
-                            </div>
-                            <div className="relative h-8 rounded bg-muted/60">
-                              <div
-                                className={`absolute top-1/2 h-4 -translate-y-1/2 rounded ${getKindDotClassName(event.kind)}`}
-                                style={barStyle}
-                              />
-                            </div>
-                            <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                              <span>{formatDateTime(event.startTime)}</span>
-                              <span>{formatDuration(event.durationMs, event.startTime, event.endTime)}</span>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
+                  {timelineSpans.length > 0 ? (
+                    <FlameGraph
+                      spans={timelineSpans}
+                      selectedSpanId={selectedEventId}
+                      onSelectSpan={selectEvent}
+                    />
                   ) : (
                     <div className="flex h-36 items-center justify-center text-sm text-muted-foreground">
                       {isLoading ? '正在加载 timeline...' : '当前运行暂无 runtime events'}
@@ -298,10 +285,8 @@ export function TraceExplorerPage() {
 
                 <div className="rounded-lg border border-border bg-card p-4">
                   <div className="mb-3 flex items-center justify-between">
-                    <h4 className="text-sm font-medium text-foreground">Event List</h4>
-                    <span className="text-xs text-muted-foreground">
-                      按开始时间排序
-                    </span>
+                    <h4 className="text-sm font-medium text-foreground">Event Overview</h4>
+                    <span className="text-xs text-muted-foreground">按开始时间排序</span>
                   </div>
 
                   {selectedRuntimeEvents.length > 0 ? (
@@ -313,7 +298,7 @@ export function TraceExplorerPage() {
                           <button
                             key={event.id}
                             onClick={() => selectEvent(event.id)}
-                            className={`flex w-full items-center gap-3 rounded-md border p-3 text-left text-sm transition-colors ${
+                            className={`flex w-full items-center gap-3 rounded-md border px-3 py-2.5 text-left text-sm transition-colors ${
                               isSelected
                                 ? 'border-primary/30 bg-primary/5'
                                 : 'border-border hover:bg-accent'
@@ -365,15 +350,39 @@ export function TraceExplorerPage() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 gap-2 text-sm">
-                        <div><span className="text-muted-foreground">Event ID:</span> <span className="font-mono">{selectedEvent.id}</span></div>
-                        <div><span className="text-muted-foreground">Trace ID:</span> <span className="font-mono">{selectedEvent.traceId}</span></div>
-                        <div><span className="text-muted-foreground">Run ID:</span> <span className="font-mono">{selectedEvent.runId}</span></div>
-                        <div><span className="text-muted-foreground">Parent ID:</span> <span className="font-mono">{selectedEvent.parentId || '-'}</span></div>
-                        <div><span className="text-muted-foreground">Step ID:</span> <span className="font-mono">{selectedEvent.stepId || '-'}</span></div>
-                        <div><span className="text-muted-foreground">Start Time:</span> <span>{formatDateTime(selectedEvent.startTime)}</span></div>
-                        <div><span className="text-muted-foreground">End Time:</span> <span>{formatDateTime(selectedEvent.endTime)}</span></div>
-                        <div><span className="text-muted-foreground">Duration:</span> <span>{formatDuration(selectedEvent.durationMs, selectedEvent.startTime, selectedEvent.endTime)}</span></div>
+                      <div className="grid grid-cols-1 gap-1.5 text-sm">
+                        <div className="grid grid-cols-[88px_minmax(0,1fr)] items-start gap-2">
+                          <span className="text-muted-foreground">Event ID:</span>
+                          <span className="font-mono text-[13px] leading-5 text-foreground break-all">{selectedEvent.id}</span>
+                        </div>
+                        <div className="grid grid-cols-[88px_minmax(0,1fr)] items-start gap-2">
+                          <span className="text-muted-foreground">Trace ID:</span>
+                          <span className="font-mono text-[13px] leading-5 text-foreground break-all">{selectedEvent.traceId}</span>
+                        </div>
+                        <div className="grid grid-cols-[88px_minmax(0,1fr)] items-start gap-2">
+                          <span className="text-muted-foreground">Run ID:</span>
+                          <span className="font-mono text-[13px] leading-5 text-foreground break-all">{selectedEvent.runId}</span>
+                        </div>
+                        <div className="grid grid-cols-[88px_minmax(0,1fr)] items-start gap-2">
+                          <span className="text-muted-foreground">Parent ID:</span>
+                          <span className="font-mono text-[13px] leading-5 text-foreground break-all">{selectedEvent.parentId || '-'}</span>
+                        </div>
+                        <div className="grid grid-cols-[88px_minmax(0,1fr)] items-start gap-2">
+                          <span className="text-muted-foreground">Step ID:</span>
+                          <span className="font-mono text-[13px] leading-5 text-foreground break-all">{selectedEvent.stepId || '-'}</span>
+                        </div>
+                        <div className="grid grid-cols-[88px_minmax(0,1fr)] items-start gap-2">
+                          <span className="text-muted-foreground">Start Time:</span>
+                          <span className="text-[13px] leading-5 text-foreground">{formatDateTime(selectedEvent.startTime)}</span>
+                        </div>
+                        <div className="grid grid-cols-[88px_minmax(0,1fr)] items-start gap-2">
+                          <span className="text-muted-foreground">End Time:</span>
+                          <span className="text-[13px] leading-5 text-foreground">{formatDateTime(selectedEvent.endTime)}</span>
+                        </div>
+                        <div className="grid grid-cols-[88px_minmax(0,1fr)] items-start gap-2">
+                          <span className="text-muted-foreground">Duration:</span>
+                          <span className="text-[13px] leading-5 text-foreground">{formatDuration(selectedEvent.durationMs, selectedEvent.startTime, selectedEvent.endTime)}</span>
+                        </div>
                       </div>
 
                       <div className="space-y-3">

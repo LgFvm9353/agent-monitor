@@ -61,6 +61,9 @@ export type {
   TraceData,
   TraceOptions,
   SSETraceEventType,
+  RuntimeData,
+  RuntimeEventKind,
+  RuntimeEventStatus,
   TransportConfig,
   SampleRateConfig,
 } from './types';

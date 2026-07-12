@@ -278,6 +278,7 @@ export class AgentService {
       systemPrompt: config.systemPrompt || 'You are a helpful AI assistant.',
       temperature: config.temperature,
       maxTokens: config.maxTokens,
+      traceId,
     });
 
     try {

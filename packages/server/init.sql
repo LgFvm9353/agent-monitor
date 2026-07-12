@@ -48,6 +48,34 @@ CREATE TABLE IF NOT EXISTS trace_spans (
   INDEX idx_trace_spans_trace_id (trace_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Agent 运行时事件明细
+CREATE TABLE IF NOT EXISTS runtime_events (
+  id             VARCHAR(64)  PRIMARY KEY,
+  trace_id       VARCHAR(64)  NOT NULL,
+  run_id         VARCHAR(64)  NOT NULL,
+  parent_id      VARCHAR(64)  NULL,
+  step_id        VARCHAR(64)  NULL,
+  kind           VARCHAR(32)  NOT NULL,
+  event_type     VARCHAR(64)  NOT NULL,
+  name           VARCHAR(255) NOT NULL,
+  status         VARCHAR(16)  NOT NULL,
+  start_time     BIGINT       NOT NULL,
+  end_time       BIGINT       NULL,
+  duration_ms    INT          NULL,
+  input          MEDIUMTEXT   NULL,
+  output_summary MEDIUMTEXT   NULL,
+  error          TEXT         NULL,
+  metadata       MEDIUMTEXT   NULL,
+  created_at     BIGINT       NOT NULL,
+
+  INDEX idx_runtime_events_trace_id (trace_id),
+  INDEX idx_runtime_events_run_id (run_id),
+  INDEX idx_runtime_events_kind (kind),
+  INDEX idx_runtime_events_event_type (event_type),
+  INDEX idx_runtime_events_status (status),
+  INDEX idx_runtime_events_start_time (start_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- ===== Eval 相关 =====
 
 -- Eval 数据集

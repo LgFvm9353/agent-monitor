@@ -208,5 +208,13 @@ export type StreamEvent =
   | { type: 'tool-result'; id: string; name: string; result: unknown; error?: string }
   | { type: 'step-start'; stepIndex: number }
   | { type: 'step-end'; stepIndex: number }
-  | { type: 'done'; output: string; tokens: { input: number; output: number; total: number }; toolCalls: ToolCallRecord[] }
-  | { type: 'error'; message: string };
+  | {
+      type: 'done';
+      output: string;
+      tokens: { input: number; output: number; total: number };
+      toolCalls: ToolCallRecord[];
+      traceId?: string;
+      runId?: string;
+      runtimeEvents?: RuntimeEvent[];
+    }
+  | { type: 'error'; message: string; traceId?: string; runId?: string; runtimeEvents?: RuntimeEvent[] };

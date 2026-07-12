@@ -6,6 +6,7 @@ import type {
   MonitorEvent,
   Breadcrumb,
   EventMeta,
+  RuntimeData,
 } from '../types';
 
 /** 插件 collect() 返回的轻量事件 — eventId 和 meta 由 Monitor 自动填充 */
@@ -37,6 +38,10 @@ export interface MonitorCore {
   config: MonitorConfig;
   /** 手动上报事件 */
   report: (event: Omit<MonitorEvent, 'eventId' | 'meta'> & { meta?: Partial<EventMeta> }) => void;
+  /** 上报 Agent Runtime 事件 */
+  reportRuntimeEvent?: (event: RuntimeData, meta?: Partial<EventMeta>) => void;
+  /** 批量上报 Agent Runtime 事件 */
+  reportRuntimeEvents?: (events: RuntimeData[], meta?: Partial<EventMeta>) => void;
   /** 添加面包屑 */
   addBreadcrumb: (breadcrumb: Omit<Breadcrumb, 'timestamp'>) => void;
   /** 获取会话ID */

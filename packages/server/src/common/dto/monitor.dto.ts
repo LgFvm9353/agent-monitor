@@ -10,7 +10,7 @@ export interface ReportEvent {
   timestamp: number;
 }
 
-const VALID_EVENT_TYPES = ['error', 'performance', 'behavior', 'custom'];
+const VALID_EVENT_TYPES = ['error', 'performance', 'behavior', 'custom', 'sse', 'runtime'];
 
 /** SDK 批量上报请求 */
 export class ReportDto {

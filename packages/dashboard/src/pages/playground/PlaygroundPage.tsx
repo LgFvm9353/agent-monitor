@@ -10,7 +10,9 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Send, Settings, Loader2, Wrench, ChevronRight, ChevronDown, Check, X, Square, Plus } from 'lucide-react';
+import type { RuntimeData, Trace } from '@agenteye/monitor-sdk';
 import { api } from '../../lib/api';
+import { monitor } from '../../lib/monitor';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Button } from '../../components/ui/Button';
 import { Textarea } from '../../components/ui/Textarea';
@@ -176,6 +178,10 @@ export function PlaygroundPage() {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    const trace = monitor.createTrace?.({ aiMessageId: `${sessionId}-${Date.now()}` }) as Trace | undefined;
+    let hasMarkedFirstChunk = false;
+
+    trace?.start();
 
     try {
       const response = await api.chatStream({
@@ -203,6 +209,12 @@ export function PlaygroundPage() {
         const { done, value } = await reader.read();
         if (done) break;
 
+        if (!hasMarkedFirstChunk) {
+          trace?.firstChunk();
+          hasMarkedFirstChunk = true;
+        }
+        trace?.recordChunk();
+
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
@@ -228,6 +240,7 @@ export function PlaygroundPage() {
                 break;
 
               case 'tool-call-start':
+                trace?.toolStart(event.name, undefined, event.id);
                 setMessages((prev) => {
                   const idx = prev.length;
                   toolMsgIndices.current.set(event.id, idx);
@@ -242,6 +255,10 @@ export function PlaygroundPage() {
                 break;
 
               case 'tool-result':
+                trace?.toolEnd(event.id, {
+                  success: !event.error,
+                  error: event.error,
+                });
                 setMessages((prev) => {
                   const idx = toolMsgIndices.current.get(event.id);
                   if (idx === undefined) return prev;
@@ -260,11 +277,19 @@ export function PlaygroundPage() {
                 break;
 
               case 'done':
+                if (Array.isArray(event.runtimeEvents) && event.runtimeEvents.length > 0) {
+                  monitor.reportRuntimeEvents?.(event.runtimeEvents as RuntimeData[]);
+                }
+                trace?.complete();
                 // 服务端已确认对话结束，主动终止流读取
                 streamEnded = true;
                 break;
 
               case 'error':
+                if (Array.isArray(event.runtimeEvents) && event.runtimeEvents.length > 0) {
+                  monitor.reportRuntimeEvents?.(event.runtimeEvents as RuntimeData[]);
+                }
+                trace?.error(event.message);
                 setMessages((prev) => [...prev, {
                   role: 'assistant',
                   content: `❌ Error: ${event.message}`,
@@ -283,7 +308,11 @@ export function PlaygroundPage() {
         }
       }
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') return;
+      if (error instanceof Error && error.name === 'AbortError') {
+        trace?.abort('user_abort');
+        return;
+      }
+      trace?.error(error instanceof Error ? error.message : String(error));
       setMessages((prev) => [...prev, {
         role: 'assistant',
         content: `❌ Connection error: ${error instanceof Error ? error.message : String(error)}`,

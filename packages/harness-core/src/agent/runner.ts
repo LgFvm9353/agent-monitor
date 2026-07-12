@@ -250,11 +250,24 @@ export class AgentRunner {
    */
   async *runStream(
     userMessage: string,
-    config: Omit<AgentConfig, 'tools' | 'middleware' | 'memory'>,
+    config: Omit<AgentConfig, 'tools' | 'middleware' | 'memory'> & { traceId?: string },
   ): AsyncGenerator<StreamEvent> {
     const startTime = Date.now();
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+    const traceId = config.traceId ?? this.tracer.startTrace('agent-run-stream', { sessionId: crypto.randomUUID?.() ?? Date.now().toString(36) });
+    const runId = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+    this.runtimeEventRecorder.clear();
+    const runEvent = this.runtimeEventRecorder.start({
+      traceId,
+      runId,
+      kind: 'run',
+      eventType: 'run_started',
+      name: 'Agent Stream Run',
+      input: { userMessage },
+      metadata: { model: config.model },
+    });
 
     const messages: AgentMessage[] = [
       { role: 'system', content: config.systemPrompt },
@@ -270,10 +283,28 @@ export class AgentRunner {
     }));
 
     const toolCalls: ToolCallRecord[] = [];
+    const activeToolEventIds = new Map<string, string>();
     const maxSteps = 20;
 
     for (let stepIndex = 0; stepIndex < maxSteps; stepIndex++) {
       yield { type: 'step-start', stepIndex };
+
+      const stepId = `step-${stepIndex + 1}`;
+      const stepEvent = this.runtimeEventRecorder.start({
+        traceId,
+        runId,
+        parentId: runEvent.eventId,
+        stepId,
+        kind: 'step',
+        eventType: 'step_started',
+        name: `LLM Call #${stepIndex + 1}`,
+        input: messages[messages.length - 1]?.content,
+        metadata: { stepIndex, phase: 'llm_call' },
+      });
+
+      if (this.adapter.countTokens) {
+        totalInputTokens += this.adapter.countTokens(messages);
+      }
 
       let fullContent = '';
       let reasoningContent = '';
@@ -304,6 +335,18 @@ export class AgentRunner {
             // 检测新的 tool call（通过 accumulator 检查）
             const before = accumulator.peek();
             if (tc.id && tc.name && !before.some(b => b.id === tc.id)) {
+              const toolEvent = this.runtimeEventRecorder.start({
+                traceId,
+                runId,
+                parentId: stepEvent.eventId,
+                stepId,
+                kind: 'tool_call',
+                eventType: 'tool_call_started',
+                name: tc.name,
+                input: tc.arguments,
+                metadata: { toolCallId: tc.id },
+              });
+              activeToolEventIds.set(tc.id, toolEvent.eventId);
               yield { type: 'tool-call-start', id: tc.id, name: tc.name };
             }
 
@@ -337,6 +380,9 @@ export class AgentRunner {
         const pendingCalls = accumulator.drain();
 
         if (pendingCalls.length > 0) {
+          this.runtimeEventRecorder.complete(stepEvent.eventId, fullContent.substring(0, 500), {
+            finishReason: 'tool_calls',
+          });
           yield { type: 'step-end', stepIndex };
 
           // 添加 assistant 消息（含 reasoning_content 用于 DeepSeek thinking mode）
@@ -361,6 +407,14 @@ export class AgentRunner {
               };
               toolCalls.push(record);
 
+              const toolEventId = activeToolEventIds.get(tc.id);
+              if (toolEventId) {
+                this.runtimeEventRecorder.complete(toolEventId, summarizeRuntimeValue(result), {
+                  toolCallId: tc.id,
+                });
+                activeToolEventIds.delete(tc.id);
+              }
+
               yield { type: 'tool-result', id: tc.id, name: tc.name, result };
 
               // 添加 tool 结果消息
@@ -382,6 +436,14 @@ export class AgentRunner {
               };
               toolCalls.push(record);
 
+              const toolEventId = activeToolEventIds.get(tc.id);
+              if (toolEventId) {
+                this.runtimeEventRecorder.fail(toolEventId, errorMsg, {
+                  toolCallId: tc.id,
+                });
+                activeToolEventIds.delete(tc.id);
+              }
+
               yield { type: 'tool-result', id: tc.id, name: tc.name, result: null, error: errorMsg };
 
               messages.push({
@@ -398,9 +460,15 @@ export class AgentRunner {
         }
 
         // 没有 tool calls → 最终输出
+        this.runtimeEventRecorder.complete(stepEvent.eventId, fullContent.substring(0, 500), {
+          finishReason: 'stop',
+        });
         yield { type: 'step-end', stepIndex };
 
         totalOutputTokens += this.estimateTokens(fullContent);
+        this.runtimeEventRecorder.complete(runEvent.eventId, fullContent.substring(0, 500), {
+          totalTokens: totalInputTokens + totalOutputTokens,
+        });
 
         yield {
           type: 'done',
@@ -411,17 +479,28 @@ export class AgentRunner {
             total: totalInputTokens + totalOutputTokens,
           },
           toolCalls,
+          traceId,
+          runId,
+          runtimeEvents: this.runtimeEventRecorder.getAll(),
         };
         return;
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        yield { type: 'error', message: errorMsg };
+        this.runtimeEventRecorder.fail(stepEvent.eventId, errorMsg);
+        this.runtimeEventRecorder.fail(runEvent.eventId, errorMsg, {
+          totalTokens: totalInputTokens + totalOutputTokens,
+        });
+        yield { type: 'error', message: errorMsg, traceId, runId, runtimeEvents: this.runtimeEventRecorder.getAll() };
         return;
       }
     }
 
     // 超出最大步数
-    yield { type: 'error', message: `Agent exceeded maximum of ${maxSteps} steps` };
+    const maxStepError = `Agent exceeded maximum of ${maxSteps} steps`;
+    this.runtimeEventRecorder.fail(runEvent.eventId, maxStepError, {
+      totalTokens: totalInputTokens + totalOutputTokens,
+    });
+    yield { type: 'error', message: maxStepError, traceId, runId, runtimeEvents: this.runtimeEventRecorder.getAll() };
   }
 
   /** 粗略 Token 估算（英文：~4 chars/token，中文：~1.5 chars/token） */

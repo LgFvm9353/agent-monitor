@@ -8,25 +8,11 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import { Monitor, ErrorPlugin, PerformancePlugin, BehaviorPlugin } from '@agenteye/monitor-sdk';
 import App from './App';
 import './global.css';
+import { monitor } from './lib/monitor';
 
 // ===== 自监控 SDK（Dogfooding） =====
-const monitor = new Monitor({
-  reportUrl: '/api/monitor/report',
-  appId: 'dashboard-self',
-  sampleRate: {
-    error: 1,
-    performance: 1,
-    behavior: 0.3,
-    custom: 1,
-  },
-});
-
-monitor.use(new ErrorPlugin());
-monitor.use(new PerformancePlugin());
-monitor.use(new BehaviorPlugin());
 monitor.start();
 
 // 挂载前短暂延迟，确保 SDK 插件 setup 完毕

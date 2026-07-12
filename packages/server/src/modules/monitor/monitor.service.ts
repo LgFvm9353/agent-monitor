@@ -3,12 +3,16 @@ import type { DrizzleDB } from '../../db/schema';
 import { DB_TOKEN } from '../../db/drizzle.module';
 import { monitorEvents } from '../../db/schema';
 import { eq, desc, and, sql } from 'drizzle-orm';
+import { TraceService } from '../trace/trace.service';
 
 @Injectable()
 export class MonitorService {
   private readonly logger = new Logger(MonitorService.name);
 
-  constructor(@Inject(DB_TOKEN) private db: DrizzleDB) {}
+  constructor(
+    @Inject(DB_TOKEN) private db: DrizzleDB,
+    private readonly traceService: TraceService,
+  ) {}
 
   /** 接收前端 SDK 上报的事件 */
   async ingestEvents(events: Array<{
@@ -18,8 +22,15 @@ export class MonitorService {
     meta: { url?: string; sessionId?: string; userAgent?: string; sdkVersion?: string; appId?: string };
     timestamp: number;
   }>) {
+    const runtimeEvents = events.filter((event) => event.type === 'runtime');
+    const normalEvents = events.filter((event) => event.type !== 'runtime');
+
+    if (runtimeEvents.length > 0) {
+      await this.ingestRuntimeEvents(runtimeEvents);
+    }
+
     const now = Date.now();
-    for (const event of events) {
+    for (const event of normalEvents) {
       try {
         await this.db.insert(monitorEvents).values({
           id: event.eventId,
@@ -42,6 +53,134 @@ export class MonitorService {
       }
     }
     return { received: events.length };
+  }
+
+  private async ingestRuntimeEvents(events: Array<{
+    eventId: string;
+    data: unknown;
+    timestamp: number;
+  }>): Promise<void> {
+    const rows = events
+      .map((event) => this.mapRuntimeEvent(event))
+      .filter((event): event is {
+        id: string;
+        traceId: string;
+        runId: string;
+        parentId?: string;
+        stepId?: string;
+        kind: string;
+        eventType: string;
+        name: string;
+        status: string;
+        startTime: number;
+        endTime?: number;
+        durationMs?: number;
+        input?: string;
+        outputSummary?: string;
+        error?: string;
+        metadata?: string;
+        createdAt: number;
+      } => event !== null);
+
+    for (const row of rows) {
+      try {
+        await this.traceService.saveRuntimeEvents([row]);
+      } catch (err) {
+        const msg = (err as Error).message || '';
+        if (!msg.includes('ER_DUP_ENTRY') && !msg.includes('Duplicate entry')) {
+          this.logger.error(`[MonitorService] runtime insert failed: ${row.id}`, msg);
+        }
+      }
+    }
+  }
+
+  private mapRuntimeEvent(event: { eventId: string; data: unknown; timestamp: number }): {
+    id: string;
+    traceId: string;
+    runId: string;
+    parentId?: string;
+    stepId?: string;
+    kind: string;
+    eventType: string;
+    name: string;
+    status: string;
+    startTime: number;
+    endTime?: number;
+    durationMs?: number;
+    input?: string;
+    outputSummary?: string;
+    error?: string;
+    metadata?: string;
+    createdAt: number;
+  } | null {
+    if (!event.data || typeof event.data !== 'object') {
+      return null;
+    }
+
+    const runtime = event.data as Record<string, unknown>;
+    const traceId = this.readString(runtime.traceId);
+    const runId = this.readString(runtime.runId);
+    const kind = this.readString(runtime.kind);
+    const eventType = this.readString(runtime.eventType);
+    const name = this.readString(runtime.name);
+    const status = this.readString(runtime.status);
+    const startTime = this.readNumber(runtime.startTime);
+
+    if (!traceId || !runId || !kind || !eventType || !name || status === null || startTime === null) {
+      return null;
+    }
+
+    return {
+      id: event.eventId,
+      traceId,
+      runId,
+      parentId: this.readOptionalString(runtime.parentId),
+      stepId: this.readOptionalString(runtime.stepId),
+      kind,
+      eventType,
+      name,
+      status,
+      startTime,
+      endTime: this.readOptionalNumber(runtime.endTime),
+      durationMs: this.readOptionalNumber(runtime.durationMs),
+      input: this.stringifyOptional(runtime.input),
+      outputSummary: this.stringifyOptional(runtime.outputSummary),
+      error: this.readOptionalString(runtime.error),
+      metadata: this.stringifyOptional(runtime.metadata),
+      createdAt: event.timestamp,
+    };
+  }
+
+  private readString(value: unknown): string | null {
+    return typeof value === 'string' && value.length > 0 ? value : null;
+  }
+
+  private readOptionalString(value: unknown): string | undefined {
+    return typeof value === 'string' && value.length > 0 ? value : undefined;
+  }
+
+  private readNumber(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  }
+
+  private readOptionalNumber(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  }
+
+  private stringifyOptional(value: unknown): string | undefined {
+    if (value === undefined) {
+      return undefined;
+    }
+
+    if (typeof value === 'string') {
+      return value;
+    }
+
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
   }
 
   /** 查询最近的事件（支持按 appId + type 过滤） */

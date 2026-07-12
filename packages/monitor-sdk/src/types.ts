@@ -9,11 +9,11 @@ export interface MonitorEvent {
   eventId: string;
   type: EventType;
   timestamp: number;
-  data: ErrorData | PerformanceData | BehaviorData | CustomData | TraceData;
+  data: ErrorData | PerformanceData | BehaviorData | CustomData | TraceData | RuntimeData;
   meta: EventMeta;
 }
 
-export type EventType = 'error' | 'performance' | 'behavior' | 'custom' | 'sse';
+export type EventType = 'error' | 'performance' | 'behavior' | 'custom' | 'sse' | 'runtime';
 
 export interface EventMeta {
   url: string;
@@ -152,6 +152,30 @@ export interface TraceOptions {
   stallThreshold?: number;
 }
 
+// ---------- Agent Runtime ----------
+
+export type RuntimeEventKind = 'run' | 'step' | 'tool_call' | 'skill_call' | 'mcp_call' | 'error';
+
+export type RuntimeEventStatus = 'started' | 'completed' | 'failed';
+
+export interface RuntimeData {
+  traceId: string;
+  runId: string;
+  parentId?: string;
+  stepId?: string;
+  kind: RuntimeEventKind;
+  eventType: string;
+  name: string;
+  status: RuntimeEventStatus;
+  startTime: number;
+  endTime?: number;
+  durationMs?: number;
+  input?: unknown;
+  outputSummary?: unknown;
+  error?: string;
+  metadata?: Record<string, unknown>;
+}
+
 // ---------- Monitor 配置 ----------
 
 export interface SampleRateConfig {
@@ -159,6 +183,8 @@ export interface SampleRateConfig {
   performance?: number;
   behavior?: number;
   custom?: number;
+  sse?: number;
+  runtime?: number;
 }
 
 export interface MonitorConfig {

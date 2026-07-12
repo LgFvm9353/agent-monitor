@@ -7,12 +7,25 @@
  * 3. 管理会话和面包屑上下文
  * 4. beforeSend 钩子 + 分类型采样 + debug 日志
  */
-import type { MonitorConfig, MonitorEvent, Breadcrumb, EventMeta, SampleRateConfig } from '../types';
+import type {
+  MonitorConfig,
+  MonitorEvent,
+  Breadcrumb,
+  EventMeta,
+  SampleRateConfig,
+  RuntimeData,
+} from '../types';
 import type { MonitorPlugin, MonitorCore, CollectableEvent } from './types';
 import { Pipeline } from './pipeline';
 import { Transport } from './transport';
 
 declare const SDK_VERSION: string;
+
+const FALLBACK_SDK_VERSION = '0.1.0';
+
+function getSdkVersion(): string {
+  return typeof SDK_VERSION !== 'undefined' ? SDK_VERSION : FALLBACK_SDK_VERSION;
+}
 
 let instanceId = 0;
 
@@ -98,7 +111,7 @@ export class Monitor implements MonitorCore {
         userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
         sessionId: this.sessionId,
         pageId: this.getPageId(),
-        sdkVersion: SDK_VERSION,
+        sdkVersion: getSdkVersion(),
         appId: this.config.appId || 'unknown',
         tags: { ...(this.config.appId ? { appId: this.config.appId } : {}) },
         ...event.meta,
@@ -114,6 +127,42 @@ export class Monitor implements MonitorCore {
     }
 
     this.pipeline.process([processed]);
+  }
+
+  reportRuntimeEvent(event: RuntimeData, meta?: Partial<EventMeta>): void {
+    this.reportRuntimeEvents([event], meta);
+  }
+
+  reportRuntimeEvents(events: RuntimeData[], meta?: Partial<EventMeta>): void {
+    if (events.length === 0) {
+      return;
+    }
+
+    const collectableEvents: CollectableEvent[] = events.map((event) => ({
+      type: 'runtime',
+      timestamp: event.startTime,
+      data: event,
+      meta,
+    }));
+
+    const enriched = collectableEvents
+      .filter((event) => this.shouldSample(event.type, this.config.sampleRate ?? 1))
+      .map((event) => this.enrichEvent(event));
+
+    if (enriched.length === 0) {
+      return;
+    }
+
+    const processed = this.beforeSend
+      ? enriched.map((event) => this.beforeSend!(event)).filter((event): event is MonitorEvent => event !== null)
+      : enriched;
+
+    if (processed.length === 0) {
+      this.log('Runtime events dropped by beforeSend');
+      return;
+    }
+
+    this.pipeline.process(processed);
   }
 
   // ===== Breadcrumb Management =====
@@ -168,7 +217,7 @@ export class Monitor implements MonitorCore {
         userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
         sessionId: this.sessionId,
         pageId: this.getPageId(),
-        sdkVersion: SDK_VERSION,
+        sdkVersion: getSdkVersion(),
         appId: this.config.appId || 'unknown',
         tags: { ...(this.config.appId ? { appId: this.config.appId } : {}) },
         ...event.meta,
